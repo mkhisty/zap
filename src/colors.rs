@@ -311,6 +311,79 @@ impl ColorConfig {
                 font-family: monospace;
                 font-size: 14px;
             }}
+
+            /* Calendar styles */
+            .calendar-header {{
+                color: {cluster_title};
+                font-family: monospace;
+                font-weight: bold;
+                font-size: 16px;
+                margin-bottom: 8px;
+            }}
+
+            .calendar-day-header {{
+                color: {text_secondary};
+                font-family: monospace;
+                font-size: 12px;
+                padding: 4px;
+            }}
+
+            .calendar-grid {{
+                background-color: transparent;
+            }}
+
+            .calendar-day {{
+                background-color: {todo_row_bg};
+                border-radius: 4px;
+                min-height: 80px;
+                min-width: 60px;
+            }}
+
+            .calendar-day-number {{
+                color: {text_primary};
+                font-family: monospace;
+                font-weight: bold;
+                font-size: 12px;
+            }}
+
+            .calendar-today {{
+                border: 2px solid {mode_indicator};
+            }}
+
+            .calendar-selected {{
+                background-color: {todo_row_selected};
+            }}
+
+            .calendar-task {{
+                color: {text_primary};
+                font-family: monospace;
+                font-size: 10px;
+                padding: 1px 0;
+            }}
+
+            .calendar-task-completed {{
+                color: {text_completed};
+                text-decoration: line-through;
+            }}
+
+            .calendar-task-more {{
+                color: {text_secondary};
+                font-family: monospace;
+                font-size: 10px;
+                font-style: italic;
+            }}
+
+            .calendar-task-max {{
+                color: {priority_max};
+            }}
+
+            .calendar-task-high {{
+                color: {priority_high};
+            }}
+
+            .calendar-task-medium {{
+                color: {priority_medium};
+            }}
         "#,
             main_bg = self.main_bg,
             cluster_title = self.cluster_title,
@@ -342,6 +415,7 @@ impl ColorConfig {
             section_text = self.section_text,
             insert_indicator = self.insert_indicator,
             text_primary = self.text_primary,
+            text_secondary = self.text_secondary,
         )
     }
 }
