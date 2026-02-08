@@ -43,6 +43,8 @@ pub struct Todo {
     pub priority: Priority,
     #[serde(default)]
     pub is_section: bool,
+    #[serde(default)]
+    pub abandoned: bool,
 }
 
 impl Todo {
@@ -56,6 +58,7 @@ impl Todo {
             subtasks: Vec::new(),
             priority,
             is_section: false,
+            abandoned: false,
         }
     }
 
@@ -69,6 +72,7 @@ impl Todo {
             subtasks: Vec::new(),
             priority: Priority::None,
             is_section: true,
+            abandoned: false,
         }
     }
 
@@ -89,6 +93,7 @@ pub struct FlatTodo {
     pub path: Vec<usize>,
     pub has_subtasks: bool,
     pub is_folded: bool,
+    pub hierarchy_path: Vec<String>,  // Names of parent tasks for breadcrumb display
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -174,12 +179,12 @@ impl TodoList {
     pub fn flatten(&self) -> Vec<FlatTodo> {
         let mut result = Vec::new();
         for (i, todo) in self.todos.iter().enumerate() {
-            self.flatten_recursive(todo, 0, vec![i], &mut result);
+            self.flatten_recursive(todo, 0, vec![i], Vec::new(), &mut result);
         }
         result
     }
 
-    fn flatten_recursive(&self, todo: &Todo, depth: usize, path: Vec<usize>, result: &mut Vec<FlatTodo>) {
+    fn flatten_recursive(&self, todo: &Todo, depth: usize, path: Vec<usize>, hierarchy_path: Vec<String>, result: &mut Vec<FlatTodo>) {
         let is_folded = self.is_folded(&todo.id);
         let has_subtasks = todo.has_subtasks();
 
@@ -189,6 +194,7 @@ impl TodoList {
             path: path.clone(),
             has_subtasks,
             is_folded,
+            hierarchy_path: hierarchy_path.clone(),
         });
 
         // Only include subtasks if not folded
@@ -196,7 +202,10 @@ impl TodoList {
             for (i, subtask) in todo.subtasks.iter().enumerate() {
                 let mut sub_path = path.clone();
                 sub_path.push(i);
-                self.flatten_recursive(subtask, depth + 1, sub_path, result);
+                // Add current task's text to the hierarchy path for subtasks
+                let mut sub_hierarchy = hierarchy_path.clone();
+                sub_hierarchy.push(todo.text.clone());
+                self.flatten_recursive(subtask, depth + 1, sub_path, sub_hierarchy, result);
             }
         }
     }
@@ -279,6 +288,10 @@ impl TodoList {
     pub fn toggle_at_path(&mut self, path: &[usize]) -> Option<usize> {
         let is_completed = if let Some(todo) = self.get_mut_at_path(path) {
             todo.toggle();
+            // Completed and abandoned are mutually exclusive
+            if todo.completed {
+                todo.abandoned = false;
+            }
             todo.completed
         } else {
             return None;
@@ -299,6 +312,17 @@ impl TodoList {
 
         self.save();
         new_index
+    }
+
+    pub fn abandon_at_path(&mut self, path: &[usize]) {
+        if let Some(todo) = self.get_mut_at_path(path) {
+            todo.abandoned = !todo.abandoned;
+            // If abandoning, also mark as not completed
+            if todo.abandoned {
+                todo.completed = false;
+            }
+        }
+        self.save();
     }
 
     pub fn move_up(&mut self, path: &[usize]) -> bool {
@@ -353,6 +377,11 @@ impl TodoList {
             // Sections stay in place relative to each other but sort after regular tasks
             if a.is_section != b.is_section {
                 return a.is_section.cmp(&b.is_section);
+            }
+
+            // Abandoned tasks sort last (after completed)
+            if a.abandoned != b.abandoned {
+                return a.abandoned.cmp(&b.abandoned);
             }
 
             // Completed tasks sort after incomplete tasks

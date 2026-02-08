@@ -1,8 +1,8 @@
 use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use gtk4::prelude::*;
 use gtk4::{
-    gdk, Application, ApplicationWindow, Box as GtkBox, Entry, EventControllerKey, Frame, Grid,
-    Label, ListBox, ListBoxRow, Notebook, Orientation, ScrolledWindow, SelectionMode, Stack,
+    gdk, Application, ApplicationWindow, Box as GtkBox, Button, Entry, EventControllerKey, Frame,
+    Grid, Label, ListBox, ListBoxRow, Notebook, Orientation, ScrolledWindow, SelectionMode, Stack,
     StackTransitionType,
 };
 use std::cell::RefCell;
@@ -27,6 +27,7 @@ enum InputMode {
 #[derive(Clone, Debug, Default)]
 struct DisplaySettings {
     show_start_date: bool,
+    flattened: bool,
 }
 
 /// View type for a tab
@@ -382,14 +383,21 @@ impl ZapWindow {
             // Check if we're in calendar view
             if *view_type.borrow() == ViewType::Calendar {
                 // Calendar-specific keybindings
-                // Get key name for arrow key detection
-                let key_name = key.name().map(|s| s.to_string()).unwrap_or_default();
-                let is_left = key_name == "Left" || key == gdk::Key::Left;
-                let is_right = key_name == "Right" || key == gdk::Key::Right;
-                let is_up = key_name == "Up" || key == gdk::Key::Up;
-                let is_down = key_name == "Down" || key == gdk::Key::Down;
+                // Arrow key detection
+                let is_left = key == gdk::Key::Left;
+                let is_right = key == gdk::Key::Right;
+                let is_up = key == gdk::Key::Up;
+                let is_down = key == gdk::Key::Down;
 
-                // Ctrl+Left/Right for month navigation
+                // </> or Ctrl+Left/Right for month navigation
+                if key == gdk::Key::less {
+                    change_calendar_month(&calendar_state, -1);
+                    return gdk::glib::Propagation::Stop;
+                }
+                if key == gdk::Key::greater {
+                    change_calendar_month(&calendar_state, 1);
+                    return gdk::glib::Propagation::Stop;
+                }
                 if ctrl && !shift && !alt {
                     if is_left {
                         change_calendar_month(&calendar_state, -1);
@@ -401,23 +409,25 @@ impl ZapWindow {
                     }
                 }
 
+                // h/l/j/k or arrow keys for day navigation
+                if key == gdk::Key::h || (is_left && !ctrl) {
+                    navigate_calendar(&calendar_state, -1, 0);
+                    return gdk::glib::Propagation::Stop;
+                }
+                if key == gdk::Key::l || (is_right && !ctrl) {
+                    navigate_calendar(&calendar_state, 1, 0);
+                    return gdk::glib::Propagation::Stop;
+                }
+                if key == gdk::Key::k || is_up {
+                    navigate_calendar(&calendar_state, 0, -1);
+                    return gdk::glib::Propagation::Stop;
+                }
+                if key == gdk::Key::j || is_down {
+                    navigate_calendar(&calendar_state, 0, 1);
+                    return gdk::glib::Propagation::Stop;
+                }
+
                 match key {
-                    k if k == gdk::Key::h || (is_left && !ctrl) => {
-                        navigate_calendar(&calendar_state, -1, 0);
-                        return gdk::glib::Propagation::Stop;
-                    }
-                    k if k == gdk::Key::l || (is_right && !ctrl) => {
-                        navigate_calendar(&calendar_state, 1, 0);
-                        return gdk::glib::Propagation::Stop;
-                    }
-                    k if k == gdk::Key::k || is_up => {
-                        navigate_calendar(&calendar_state, 0, -1);
-                        return gdk::glib::Propagation::Stop;
-                    }
-                    k if k == gdk::Key::j || is_down => {
-                        navigate_calendar(&calendar_state, 0, 1);
-                        return gdk::glib::Propagation::Stop;
-                    }
                     k if k == gdk::Key::i => {
                         // Insert task on selected date
                         if let Some(date) = get_selected_calendar_date(&calendar_state) {
@@ -596,6 +606,26 @@ fn execute_action(
                     let task_id = flat_todo.todo.id.clone();
                     drop(flat);
                     todos.borrow_mut().toggle_at_path(&path);
+                    refresh_list_with_settings(refresh_todos, refresh_list_box, refresh_flat_todos, refresh_display_settings);
+                    // Find the task by ID after refresh (it may have moved)
+                    let new_flat = refresh_flat_todos.borrow();
+                    let new_index = new_flat.iter().position(|ft| ft.todo.id == task_id).unwrap_or(index);
+                    drop(new_flat);
+                    if let Some(new_row) = refresh_list_box.row_at_index(new_index as i32) {
+                        refresh_list_box.select_row(Some(&new_row));
+                    }
+                }
+            }
+        }
+        Action::Abandon => {
+            if let Some(row) = list_box.selected_row() {
+                let index = row.index() as usize;
+                let flat = flat_todos.borrow();
+                if let Some(flat_todo) = flat.get(index) {
+                    let path = flat_todo.path.clone();
+                    let task_id = flat_todo.todo.id.clone();
+                    drop(flat);
+                    todos.borrow_mut().abandon_at_path(&path);
                     refresh_list_with_settings(refresh_todos, refresh_list_box, refresh_flat_todos, refresh_display_settings);
                     // Find the task by ID after refresh (it may have moved)
                     let new_flat = refresh_flat_todos.borrow();
@@ -1029,6 +1059,21 @@ impl ZapWindow {
                             notification_label.set_visible(false);
                             gtk4::glib::ControlFlow::Break
                         });
+                    } else if cmd == ":flatten" {
+                        // Toggle flattened view
+                        let mut settings = display_settings.borrow_mut();
+                        settings.flattened = !settings.flattened;
+                        let is_flat = settings.flattened;
+                        drop(settings);
+                        refresh_list_with_settings(&todos, &list_box, &flat_todos, &display_settings);
+                        notification_label.set_text(if is_flat { "Flattened view" } else { "Hierarchical view" });
+                        notification_label.remove_css_class("notification-error");
+                        notification_label.set_visible(true);
+                        let notification_label = notification_label.clone();
+                        gtk4::glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
+                            notification_label.set_visible(false);
+                            gtk4::glib::ControlFlow::Break
+                        });
                     }
                     // Unknown commands are silently ignored
                 }
@@ -1091,7 +1136,9 @@ fn create_todo_row(flat_todo: &FlatTodo, settings: &DisplaySettings) -> ListBoxR
     row.add_css_class("todo-row");
 
     let hbox = GtkBox::new(Orientation::Horizontal, 8);
-    hbox.set_margin_start(8 + (flat_todo.depth as i32 * 20));
+    // No indentation in flattened mode
+    let indent = if settings.flattened { 0 } else { flat_todo.depth as i32 * 20 };
+    hbox.set_margin_start(8 + indent);
     hbox.set_margin_end(8);
     hbox.set_margin_top(8);
     hbox.set_margin_bottom(8);
@@ -1100,8 +1147,8 @@ fn create_todo_row(flat_todo: &FlatTodo, settings: &DisplaySettings) -> ListBoxR
     if flat_todo.todo.is_section {
         row.add_css_class("section-row");
 
-        // Fold chevron for sections with subtasks
-        if flat_todo.has_subtasks {
+        // Fold chevron for sections with subtasks (not shown in flattened mode)
+        if flat_todo.has_subtasks && !settings.flattened {
             let chevron = if flat_todo.is_folded { "▶" } else { "▼" };
             let chevron_label = Label::new(Some(chevron));
             chevron_label.add_css_class("fold-chevron");
@@ -1112,6 +1159,14 @@ fn create_todo_row(flat_todo: &FlatTodo, settings: &DisplaySettings) -> ListBoxR
         let marker = Label::new(Some("§"));
         marker.add_css_class("section-marker");
         hbox.append(&marker);
+
+        // Hierarchy path for sections (in flattened mode)
+        if settings.flattened && !flat_todo.hierarchy_path.is_empty() {
+            let path_text = format!("{}/", flat_todo.hierarchy_path.join("/"));
+            let path_label = Label::new(Some(&path_text));
+            path_label.add_css_class("hierarchy-path");
+            hbox.append(&path_label);
+        }
 
         // Section text
         let text_label = Label::new(Some(&flat_todo.todo.text));
@@ -1125,21 +1180,23 @@ fn create_todo_row(flat_todo: &FlatTodo, settings: &DisplaySettings) -> ListBoxR
     }
 
     // Regular task rendering
-    // Fold chevron or subtask indicator
-    if flat_todo.has_subtasks {
-        let chevron = if flat_todo.is_folded { "▶" } else { "▼" };
-        let chevron_label = Label::new(Some(chevron));
-        chevron_label.add_css_class("fold-chevron");
-        hbox.append(&chevron_label);
-    } else if flat_todo.depth > 0 {
-        let indent = Label::new(Some("└"));
-        indent.add_css_class("subtask-indicator");
-        hbox.append(&indent);
-    } else {
-        // Empty space for alignment when no chevron or subtask indicator
-        let spacer = Label::new(Some(" "));
-        spacer.add_css_class("fold-spacer");
-        hbox.append(&spacer);
+    // Fold chevron or subtask indicator (not in flattened mode)
+    if !settings.flattened {
+        if flat_todo.has_subtasks {
+            let chevron = if flat_todo.is_folded { "▶" } else { "▼" };
+            let chevron_label = Label::new(Some(chevron));
+            chevron_label.add_css_class("fold-chevron");
+            hbox.append(&chevron_label);
+        } else if flat_todo.depth > 0 {
+            let indent = Label::new(Some("└"));
+            indent.add_css_class("subtask-indicator");
+            hbox.append(&indent);
+        } else {
+            // Empty space for alignment when no chevron or subtask indicator
+            let spacer = Label::new(Some(" "));
+            spacer.add_css_class("fold-spacer");
+            hbox.append(&spacer);
+        }
     }
 
     // Apply max priority row background class
@@ -1158,10 +1215,26 @@ fn create_todo_row(flat_todo: &FlatTodo, settings: &DisplaySettings) -> ListBoxR
     }
     hbox.append(&priority_label);
 
-    // Checkbox indicator
-    let check = if flat_todo.todo.completed { "[x]" } else { "[ ]" };
-    let check_label = Label::new(Some(check));
-    check_label.add_css_class("todo-check");
+    // Checkbox indicator or abandoned marker
+    let check_label = if flat_todo.todo.abandoned {
+        let label = Label::new(Some(" ! "));
+        label.add_css_class("abandoned-marker");
+        row.add_css_class("abandoned-row");
+        label
+    } else {
+        let check = if flat_todo.todo.completed { "[x]" } else { "[ ]" };
+        let label = Label::new(Some(check));
+        label.add_css_class("todo-check");
+        label
+    };
+
+    // Hierarchy path (shown in flattened mode, styled differently)
+    if settings.flattened && !flat_todo.hierarchy_path.is_empty() {
+        let path_text = format!("{}/", flat_todo.hierarchy_path.join("/"));
+        let path_label = Label::new(Some(&path_text));
+        path_label.add_css_class("hierarchy-path");
+        hbox.append(&path_label);
+    }
 
     // Todo text
     let text_label = Label::new(Some(&flat_todo.todo.text));
@@ -1169,6 +1242,9 @@ fn create_todo_row(flat_todo: &FlatTodo, settings: &DisplaySettings) -> ListBoxR
     text_label.set_halign(gtk4::Align::Start);
     if flat_todo.todo.completed {
         text_label.add_css_class("completed");
+    }
+    if flat_todo.todo.abandoned {
+        text_label.add_css_class("abandoned-text");
     }
 
     hbox.append(&check_label);
@@ -1235,17 +1311,71 @@ fn refresh_list_with_settings(
     let flat = todos_ref.flatten();
     let settings = display_settings.borrow();
 
-    for flat_todo in &flat {
+    // In flattened mode, filter out section headers and sort to remove section clustering
+    let display_flat: Vec<FlatTodo> = if settings.flattened {
+        let mut filtered: Vec<FlatTodo> = flat.into_iter().filter(|ft| !ft.todo.is_section).collect();
+        // Sort by: abandoned, completed status, priority, due date, then alphabetically
+        filtered.sort_by(|a, b| {
+            // Abandoned tasks last (at the very bottom)
+            if a.todo.abandoned != b.todo.abandoned {
+                return a.todo.abandoned.cmp(&b.todo.abandoned);
+            }
+            // Completed tasks after incomplete
+            if a.todo.completed != b.todo.completed {
+                return a.todo.completed.cmp(&b.todo.completed);
+            }
+            // Priority (higher priority first)
+            let priority_order = |p: &Priority| match p {
+                Priority::Max => 0,
+                Priority::High => 1,
+                Priority::Medium => 2,
+                Priority::Low => 3,
+                Priority::None => 4,
+            };
+            let priority_cmp = priority_order(&a.todo.priority).cmp(&priority_order(&b.todo.priority));
+            if priority_cmp != std::cmp::Ordering::Equal {
+                return priority_cmp;
+            }
+            // Due date (earlier first, None last)
+            let date_cmp = match (&a.todo.due_date, &b.todo.due_date) {
+                (Some(da), Some(db)) => da.cmp(db),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            };
+            if date_cmp != std::cmp::Ordering::Equal {
+                return date_cmp;
+            }
+            // Alphabetical
+            a.todo.text.to_lowercase().cmp(&b.todo.text.to_lowercase())
+        });
+        filtered
+    } else {
+        // In hierarchical mode, move abandoned tasks to the bottom while preserving structure
+        let mut non_abandoned: Vec<FlatTodo> = Vec::new();
+        let mut abandoned: Vec<FlatTodo> = Vec::new();
+        for ft in flat {
+            if ft.todo.abandoned {
+                abandoned.push(ft);
+            } else {
+                non_abandoned.push(ft);
+            }
+        }
+        non_abandoned.extend(abandoned);
+        non_abandoned
+    };
+
+    for flat_todo in &display_flat {
         let row = create_todo_row(flat_todo, &settings);
         list_box.append(&row);
     }
 
-    *flat_todos.borrow_mut() = flat;
+    *flat_todos.borrow_mut() = display_flat;
 }
 
 /// Autocomplete command input
 fn autocomplete_command(input: &str) -> Option<String> {
-    let commands = [":e ", ":e calendar", ":e list", ":n ", ":ls", ":sort", ":display_start"];
+    let commands = [":e ", ":e calendar", ":e list", ":n ", ":ls", ":sort", ":flatten", ":display_start"];
 
     // Check for command completion
     for cmd in &commands {
@@ -1328,10 +1458,27 @@ fn create_calendar_view(
     main_box.set_margin_top(8);
     main_box.set_margin_bottom(8);
 
-    // Month/Year header
+    // Month/Year header with navigation
+    let header_box = GtkBox::new(Orientation::Horizontal, 8);
+    header_box.set_halign(gtk4::Align::Center);
+
+    // Left chevron button
+    let left_btn = Button::with_label("◀");
+    left_btn.add_css_class("calendar-nav-btn");
+    header_box.append(&left_btn);
+
+    // Month label
     let month_label = Label::new(None);
     month_label.add_css_class("calendar-header");
-    main_box.append(&month_label);
+    month_label.set_width_chars(15);
+    header_box.append(&month_label);
+
+    // Right chevron button
+    let right_btn = Button::with_label("▶");
+    right_btn.add_css_class("calendar-nav-btn");
+    header_box.append(&right_btn);
+
+    main_box.append(&header_box);
 
     // Day names header
     let day_names_box = GtkBox::new(Orientation::Horizontal, 0);
@@ -1364,6 +1511,17 @@ fn create_calendar_view(
         month_label,
     };
     *calendar_state.borrow_mut() = Some(state);
+
+    // Connect button click handlers
+    let calendar_state_left = calendar_state.clone();
+    left_btn.connect_clicked(move |_| {
+        change_calendar_month(&calendar_state_left, -1);
+    });
+
+    let calendar_state_right = calendar_state.clone();
+    right_btn.connect_clicked(move |_| {
+        change_calendar_month(&calendar_state_right, 1);
+    });
 
     // Populate the calendar with tasks from all clusters
     refresh_calendar_view(calendar_state);
@@ -1413,10 +1571,14 @@ fn refresh_calendar_view(
     let todo_list = TodoList::load("main");
     let flat_todos = todo_list.flatten();
 
-    // Group tasks by day
+    // Group tasks by day, skipping completed tasks from previous days
     let mut tasks_by_day: HashMap<u32, Vec<FlatTodo>> = HashMap::new();
     for flat_todo in flat_todos {
         let date = flat_todo.todo.due_date.unwrap_or(today);
+        // Skip completed tasks from previous days
+        if flat_todo.todo.completed && date < today {
+            continue;
+        }
         if date.year() == year && date.month() == month {
             tasks_by_day.entry(date.day()).or_default().push(flat_todo);
         }

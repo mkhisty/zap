@@ -51,6 +51,20 @@ pub struct ColorConfig {
 
     // Insert mode colors
     pub insert_indicator: String,
+
+    // Abandoned task colors
+    #[serde(default = "default_abandoned_marker")]
+    pub abandoned_marker: String,
+    #[serde(default = "default_abandoned_text")]
+    pub abandoned_text: String,
+}
+
+fn default_abandoned_marker() -> String {
+    "#e06c75".to_string()
+}
+
+fn default_abandoned_text() -> String {
+    "#5c6370".to_string()
 }
 
 impl Default for ColorConfig {
@@ -102,6 +116,10 @@ impl Default for ColorConfig {
 
             // Insert mode colors
             insert_indicator: "#98c379".to_string(),
+
+            // Abandoned task colors
+            abandoned_marker: "#e06c75".to_string(),
+            abandoned_text: "#5c6370".to_string(),
         }
     }
 }
@@ -312,6 +330,29 @@ impl ColorConfig {
                 font-size: 14px;
             }}
 
+            .hierarchy-path {{
+                color: {text_secondary};
+                font-family: monospace;
+                font-size: 13px;
+                font-style: italic;
+            }}
+
+            /* Abandoned task styles */
+            .abandoned-marker {{
+                color: {abandoned_marker};
+                font-family: monospace;
+                font-weight: bold;
+                font-size: 14px;
+            }}
+
+            .abandoned-text {{
+                color: {abandoned_text};
+            }}
+
+            .abandoned-row {{
+                opacity: 0.7;
+            }}
+
             /* Calendar styles */
             .calendar-header {{
                 color: {cluster_title};
@@ -384,6 +425,21 @@ impl ColorConfig {
             .calendar-task-medium {{
                 color: {priority_medium};
             }}
+
+            .calendar-nav-btn {{
+                background-color: {todo_row_bg};
+                color: {cluster_title};
+                border: 1px solid {command_bar_border};
+                border-radius: 4px;
+                padding: 4px 12px;
+                font-family: monospace;
+                font-size: 14px;
+                min-width: 32px;
+            }}
+
+            .calendar-nav-btn:hover {{
+                background-color: {todo_row_selected};
+            }}
         "#,
             main_bg = self.main_bg,
             cluster_title = self.cluster_title,
@@ -416,6 +472,8 @@ impl ColorConfig {
             insert_indicator = self.insert_indicator,
             text_primary = self.text_primary,
             text_secondary = self.text_secondary,
+            abandoned_marker = self.abandoned_marker,
+            abandoned_text = self.abandoned_text,
         )
     }
 }

@@ -16,6 +16,7 @@ pub enum Action {
 
     // Task operations
     ToggleComplete,
+    Abandon,  // Alt+Enter - mark as never done
     Delete,  // dd
     MoveTaskDown,
     MoveTaskUp,
@@ -127,6 +128,12 @@ impl Keybindings {
             key: "Return".to_string(),
             shift: false, ctrl: false, alt: false,
             action: Action::ToggleComplete,
+            pending: None,
+        });
+        bindings.insert("abandon".to_string(), KeyBinding {
+            key: "Return".to_string(),
+            shift: false, ctrl: false, alt: true,
+            action: Action::Abandon,
             pending: None,
         });
         bindings.insert("delete".to_string(), KeyBinding {
