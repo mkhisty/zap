@@ -220,6 +220,73 @@ fn parse_month_day(s: &str, today: NaiveDate) -> Option<NaiveDate> {
     }
 }
 
+/// Parse color from input text using [c:...] or [color:...] syntax.
+/// Returns (remaining text, parsed color) if a color pattern is found.
+/// Accepts hex codes (#abc, #aabbcc), CSS named colors, or NONE to remove.
+pub fn parse_color(input: &str) -> (String, Option<String>) {
+    let re = Regex::new(r"(?i)\[(color|c):([^\]]+)\]").unwrap();
+
+    if let Some(caps) = re.captures(input) {
+        let full_match = caps.get(0).unwrap();
+        let color_str = caps.get(2).unwrap().as_str().trim();
+
+        if color_str.eq_ignore_ascii_case("none") {
+            // Remove the marker from text
+            let before = &input[..full_match.start()];
+            let after = &input[full_match.end()..];
+            let result = format!("{}{}", before, after);
+            let result = result.split_whitespace().collect::<Vec<_>>().join(" ");
+            // Return empty string to signal "remove color"
+            return (result, Some("none".to_string()));
+        }
+
+        if is_valid_color(color_str) {
+            let before = &input[..full_match.start()];
+            let after = &input[full_match.end()..];
+            let result = format!("{}{}", before, after);
+            let result = result.split_whitespace().collect::<Vec<_>>().join(" ");
+            return (result, Some(color_str.to_string()));
+        }
+    }
+
+    (input.to_string(), None)
+}
+
+/// Check if a string is a valid CSS color (hex or named)
+pub fn is_valid_color(s: &str) -> bool {
+    let s = s.trim();
+
+    // Hex colors: #rgb or #rrggbb
+    if s.starts_with('#') {
+        let hex = &s[1..];
+        return (hex.len() == 3 || hex.len() == 6)
+            && hex.chars().all(|c| c.is_ascii_hexdigit());
+    }
+
+    // CSS named colors (common subset)
+    let named_colors = [
+        "red", "blue", "green", "yellow", "orange", "purple", "pink", "cyan",
+        "magenta", "teal", "lime", "indigo", "violet", "coral", "salmon",
+        "gold", "silver", "gray", "grey", "white", "black", "brown",
+        "maroon", "navy", "olive", "aqua", "fuchsia", "crimson",
+        "tomato", "orchid", "turquoise", "sienna", "peru", "plum",
+        "khaki", "lavender", "thistle", "tan", "wheat", "beige",
+        "skyblue", "steelblue", "slateblue", "royalblue", "dodgerblue",
+        "deepskyblue", "cornflowerblue", "cadetblue", "darkblue",
+        "lightblue", "lightcoral", "lightgreen", "lightyellow",
+        "darkred", "darkgreen", "darkblue", "darkcyan", "darkmagenta",
+        "darkorange", "darkviolet", "deeppink", "firebrick",
+        "forestgreen", "hotpink", "indianred", "limegreen",
+        "mediumorchid", "mediumpurple", "mediumseagreen",
+        "mediumslateblue", "mediumspringgreen", "mediumturquoise",
+        "mediumvioletred", "orangered", "palegreen", "palevioletred",
+        "rosybrown", "sandybrown", "seagreen", "springgreen",
+        "yellowgreen", "chartreuse",
+    ];
+
+    named_colors.contains(&s.to_lowercase().as_str())
+}
+
 fn parse_relative_days(s: &str) -> Option<i64> {
     // Handle "+3" format
     if let Some(num) = s.strip_prefix('+') {

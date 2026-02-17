@@ -45,10 +45,15 @@ pub struct Todo {
     pub is_section: bool,
     #[serde(default)]
     pub abandoned: bool,
+    /// The original input string before parsing (preserves date/priority syntax)
+    #[serde(default)]
+    pub raw_text: String,
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 impl Todo {
-    pub fn new(text: String, due_date: Option<NaiveDate>, priority: Priority) -> Self {
+    pub fn new(text: String, due_date: Option<NaiveDate>, priority: Priority, raw_text: String, color: Option<String>) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
             text,
@@ -59,6 +64,8 @@ impl Todo {
             priority,
             is_section: false,
             abandoned: false,
+            raw_text,
+            color,
         }
     }
 
@@ -73,6 +80,8 @@ impl Todo {
             priority: Priority::None,
             is_section: true,
             abandoned: false,
+            raw_text: String::new(),
+            color: None,
         }
     }
 
@@ -94,6 +103,7 @@ pub struct FlatTodo {
     pub has_subtasks: bool,
     pub is_folded: bool,
     pub hierarchy_path: Vec<String>,  // Names of parent tasks for breadcrumb display
+    pub inherited_colors: Vec<String>,  // Accumulated color stack from ancestors + self
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -179,14 +189,29 @@ impl TodoList {
     pub fn flatten(&self) -> Vec<FlatTodo> {
         let mut result = Vec::new();
         for (i, todo) in self.todos.iter().enumerate() {
-            self.flatten_recursive(todo, 0, vec![i], Vec::new(), &mut result);
+            self.flatten_recursive(todo, 0, vec![i], Vec::new(), Vec::new(), false, &mut result);
         }
         result
     }
 
-    fn flatten_recursive(&self, todo: &Todo, depth: usize, path: Vec<usize>, hierarchy_path: Vec<String>, result: &mut Vec<FlatTodo>) {
+    /// Get a flattened list of ALL todos, ignoring fold state
+    pub fn flatten_all(&self) -> Vec<FlatTodo> {
+        let mut result = Vec::new();
+        for (i, todo) in self.todos.iter().enumerate() {
+            self.flatten_recursive(todo, 0, vec![i], Vec::new(), Vec::new(), true, &mut result);
+        }
+        result
+    }
+
+    fn flatten_recursive(&self, todo: &Todo, depth: usize, path: Vec<usize>, hierarchy_path: Vec<String>, ancestor_colors: Vec<String>, ignore_folds: bool, result: &mut Vec<FlatTodo>) {
         let is_folded = self.is_folded(&todo.id);
         let has_subtasks = todo.has_subtasks();
+
+        // Build inherited_colors: ancestor colors + this todo's own color
+        let mut inherited_colors = ancestor_colors.clone();
+        if let Some(ref color) = todo.color {
+            inherited_colors.push(color.clone());
+        }
 
         result.push(FlatTodo {
             todo: todo.clone(),
@@ -195,23 +220,23 @@ impl TodoList {
             has_subtasks,
             is_folded,
             hierarchy_path: hierarchy_path.clone(),
+            inherited_colors: inherited_colors.clone(),
         });
 
-        // Only include subtasks if not folded
-        if !is_folded {
+        // Only include subtasks if not folded (or if ignoring folds)
+        if ignore_folds || !is_folded {
             for (i, subtask) in todo.subtasks.iter().enumerate() {
                 let mut sub_path = path.clone();
                 sub_path.push(i);
-                // Add current task's text to the hierarchy path for subtasks
                 let mut sub_hierarchy = hierarchy_path.clone();
                 sub_hierarchy.push(todo.text.clone());
-                self.flatten_recursive(subtask, depth + 1, sub_path, sub_hierarchy, result);
+                self.flatten_recursive(subtask, depth + 1, sub_path, sub_hierarchy, inherited_colors.clone(), ignore_folds, result);
             }
         }
     }
 
     /// Get mutable reference to todo at path
-    fn get_mut_at_path(&mut self, path: &[usize]) -> Option<&mut Todo> {
+    pub fn get_mut_at_path(&mut self, path: &[usize]) -> Option<&mut Todo> {
         if path.is_empty() {
             return None;
         }
@@ -267,11 +292,15 @@ impl TodoList {
         text: String,
         due_date: Option<NaiveDate>,
         priority: Priority,
+        raw_text: String,
+        color: Option<String>,
     ) {
         if let Some(todo) = self.get_mut_at_path(path) {
             todo.text = text;
             todo.due_date = due_date;
             todo.priority = priority;
+            todo.raw_text = raw_text;
+            todo.color = color;
             self.save();
         }
     }

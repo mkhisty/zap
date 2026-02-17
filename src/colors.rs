@@ -293,6 +293,9 @@ impl ColorConfig {
 
             .section-row {{
                 background-color: {section_bg};
+            }}
+
+            .section-row-border {{
                 border-left: 3px solid {section_border};
             }}
 

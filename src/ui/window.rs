@@ -8,9 +8,8 @@ use gtk4::{
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-
 use crate::colors::ColorConfig;
-use crate::date_parser::{parse_date, parse_priority};
+use crate::date_parser::{parse_color, parse_date, parse_priority};
 use crate::keybindings::{Action, Keybindings};
 use crate::todo::{FlatTodo, Priority, Todo, TodoList};
 
@@ -60,6 +59,7 @@ struct TabContent {
     #[allow(dead_code)]
     scrolled_list: ScrolledWindow,
     scrolled_calendar: ScrolledWindow,
+    tab_label_widget: Label,
 }
 
 pub struct ZapWindow {
@@ -125,7 +125,7 @@ impl ZapWindow {
         notebook.add_css_class("zap-notebook");
 
         // Help label
-        let help_label = Label::new(Some("j/k: nav | J/K: reorder | Enter: toggle | dd: del | i: insert | e: edit | za: fold | :: cmd | Ctrl+T/W: tabs"));
+        let help_label = Label::new(Some("j/k: nav | J/K: reorder | Enter: toggle | dd: del | i: insert | e: edit | za: fold | :: cmd | Ctrl+T/W: tabs | Ctrl+Shift+C: color"));
         help_label.add_css_class("help-text");
         help_label.set_margin_bottom(4);
 
@@ -209,12 +209,10 @@ impl ZapWindow {
         content_stack.set_visible_child_name("list");
 
         // Tab label
-        let tab_label_box = GtkBox::new(Orientation::Horizontal, 4);
         let tab_label = Label::new(Some(cluster_name));
-        tab_label_box.append(&tab_label);
 
         // Add the page to notebook
-        let page_num = self.notebook.append_page(&content_stack, Some(&tab_label_box));
+        let page_num = self.notebook.append_page(&content_stack, Some(&tab_label));
 
         // Store tab content
         let tab_content = TabContent {
@@ -228,6 +226,7 @@ impl ZapWindow {
             content_stack,
             scrolled_list,
             scrolled_calendar,
+            tab_label_widget: tab_label,
         };
         self.tabs.borrow_mut().push(tab_content);
 
@@ -309,12 +308,24 @@ impl ZapWindow {
         let tabs_for_new = tabs.clone();
         let notebook_for_new = notebook.clone();
         let display_settings_for_new = display_settings.clone();
+        let window_for_picker = self.window.clone();
+        let tabs_for_picker = tabs.clone();
+        let notebook_for_picker = notebook.clone();
+        let ds_for_picker = display_settings.clone();
 
         key_controller.connect_key_pressed(move |_, key, _, modifier| {
             let mode = input_mode.borrow().clone();
             let shift = modifier.contains(gdk::ModifierType::SHIFT_MASK);
             let ctrl = modifier.contains(gdk::ModifierType::CONTROL_MASK);
             let alt = modifier.contains(gdk::ModifierType::ALT_MASK);
+
+            // Handle Ctrl+Shift+C - color picker for selected task (works in Normal mode)
+            if ctrl && shift && !alt && key == gdk::Key::C {
+                if mode == InputMode::Normal {
+                    show_task_color_picker(&window_for_picker, &tabs_for_picker, &notebook_for_picker, &ds_for_picker);
+                }
+                return gdk::glib::Propagation::Stop;
+            }
 
             // Handle Ctrl+T (new tab) and Ctrl+W (close tab) - these work in all modes
             if ctrl && !shift && !alt {
@@ -554,6 +565,7 @@ fn open_new_tab(
         content_stack,
         scrolled_list,
         scrolled_calendar,
+        tab_label_widget: tab_label,
     };
     tabs.borrow_mut().push(tab_content);
 
@@ -755,10 +767,13 @@ fn execute_action(
                                 todos_c.borrow_mut().add(todo);
                             }
                         } else {
+                            let raw_text = text.clone();
                             let (text_after_priority, priority) = parse_priority(&text);
-                            let (task_text, due_date) = parse_date(&text_after_priority);
+                            let (text_after_date, due_date) = parse_date(&text_after_priority);
+                            let (task_text, color) = parse_color(&text_after_date);
+                            let color = color.and_then(|c| if c == "none" { None } else { Some(c) });
                             if !task_text.trim().is_empty() {
-                                let todo = Todo::new(task_text, due_date, priority);
+                                let todo = Todo::new(task_text, due_date, priority, raw_text, color);
                                 todos_c.borrow_mut().add(todo);
                             }
                         }
@@ -810,11 +825,21 @@ fn execute_action(
                         entry.connect_activate(move |e| {
                             let text = e.text().to_string();
                             if !text.trim().is_empty() {
-                                let (text_after_priority, priority) = parse_priority(&text);
-                                let (task_text, due_date) = parse_date(&text_after_priority);
-                                if !task_text.trim().is_empty() {
-                                    let todo = Todo::new(task_text, due_date, priority);
-                                    todos_c.borrow_mut().add_subtask(&path_c, todo);
+                                if let Some(section_name) = text.trim().strip_prefix("/section ") {
+                                    if !section_name.trim().is_empty() {
+                                        let todo = Todo::new_section(section_name.trim().to_string());
+                                        todos_c.borrow_mut().add_subtask(&path_c, todo);
+                                    }
+                                } else {
+                                    let raw_text = text.clone();
+                                    let (text_after_priority, priority) = parse_priority(&text);
+                                    let (text_after_date, due_date) = parse_date(&text_after_priority);
+                                    let (task_text, color) = parse_color(&text_after_date);
+                                    let color = color.and_then(|c| if c == "none" { None } else { Some(c) });
+                                    if !task_text.trim().is_empty() {
+                                        let todo = Todo::new(task_text, due_date, priority, raw_text, color);
+                                        todos_c.borrow_mut().add_subtask(&path_c, todo);
+                                    }
                                 }
                             }
                             if let Some(row) = inline_entry_row_c.borrow_mut().take() {
@@ -841,7 +866,11 @@ fn execute_action(
                 let flat = flat_todos.borrow();
                 if let Some(flat_todo) = flat.get(index) {
                     let path = flat_todo.path.clone();
-                    let current_text = flat_todo.todo.text.clone();
+                    let current_text = if flat_todo.todo.raw_text.is_empty() {
+                        flat_todo.todo.text.clone()
+                    } else {
+                        flat_todo.todo.raw_text.clone()
+                    };
                     drop(flat);
                     *input_mode.borrow_mut() = InputMode::Edit(path);
                     mode_label.set_text("EDIT");
@@ -879,7 +908,6 @@ impl ZapWindow {
         let notification_label = self.notification_label.clone();
         let input_mode = self.input_mode.clone();
         let display_settings = self.display_settings.clone();
-
         self.command_entry.connect_activate(move |e| {
             let text = e.text().to_string();
             let mode = input_mode.borrow().clone();
@@ -949,14 +977,12 @@ impl ZapWindow {
 
                         tab.content_stack.set_visible_child_name("calendar");
                         // Update tab label
-                        if let Some(page_widget) = notebook.nth_page(Some(current_page as u32)) {
-                            let label = if tab.cluster_name.is_empty() {
-                                "[calendar]".to_string()
-                            } else {
-                                format!("{} [cal]", tab.cluster_name)
-                            };
-                            notebook.set_tab_label_text(&page_widget, &label);
-                        }
+                        let label_text = if tab.cluster_name.is_empty() {
+                            "[calendar]".to_string()
+                        } else {
+                            format!("{} [cal]", tab.cluster_name)
+                        };
+                        tab.tab_label_widget.set_text(&label_text);
                     } else if cmd == ":e list" {
                         // Switch back to list view
                         let mut tabs_mut = tabs.borrow_mut();
@@ -964,14 +990,12 @@ impl ZapWindow {
                         *tab.view_type.borrow_mut() = ViewType::List;
                         tab.content_stack.set_visible_child_name("list");
                         // Update tab label
-                        if let Some(page_widget) = notebook.nth_page(Some(current_page as u32)) {
-                            let label = if tab.cluster_name.is_empty() {
-                                "[new]".to_string()
-                            } else {
-                                tab.cluster_name.clone()
-                            };
-                            notebook.set_tab_label_text(&page_widget, &label);
-                        }
+                        let label_text = if tab.cluster_name.is_empty() {
+                            "[new]".to_string()
+                        } else {
+                            tab.cluster_name.clone()
+                        };
+                        tab.tab_label_widget.set_text(&label_text);
                         tab.list_box.grab_focus();
                     } else if let Some(cluster_name) = cmd.strip_prefix(":e ") {
                         // Open cluster in current tab
@@ -987,41 +1011,36 @@ impl ZapWindow {
                                 refresh_calendar_view(&tab.calendar_state);
                             }
                             tab.content_stack.set_visible_child_name("calendar");
-                            if let Some(page_widget) = notebook.nth_page(Some(current_page as u32)) {
-                                let label = if tab.cluster_name.is_empty() {
-                                    "[calendar]".to_string()
-                                } else {
-                                    format!("{} [cal]", tab.cluster_name)
-                                };
-                                notebook.set_tab_label_text(&page_widget, &label);
-                            }
+                            let label_text = if tab.cluster_name.is_empty() {
+                                "[calendar]".to_string()
+                            } else {
+                                format!("{} [cal]", tab.cluster_name)
+                            };
+                            tab.tab_label_widget.set_text(&label_text);
                         } else if cluster_name == "list" {
                             let mut tabs_mut = tabs.borrow_mut();
                             let tab = &mut tabs_mut[current_page];
                             *tab.view_type.borrow_mut() = ViewType::List;
                             tab.content_stack.set_visible_child_name("list");
-                            if let Some(page_widget) = notebook.nth_page(Some(current_page as u32)) {
-                                let label = if tab.cluster_name.is_empty() {
-                                    "[new]".to_string()
-                                } else {
-                                    tab.cluster_name.clone()
-                                };
-                                notebook.set_tab_label_text(&page_widget, &label);
-                            }
+                            let label_text = if tab.cluster_name.is_empty() {
+                                "[new]".to_string()
+                            } else {
+                                tab.cluster_name.clone()
+                            };
+                            tab.tab_label_widget.set_text(&label_text);
                             tab.list_box.grab_focus();
                         } else if !cluster_name.is_empty() {
                             let path = TodoList::cluster_path(cluster_name);
                             if path.exists() {
                                 *todos.borrow_mut() = TodoList::load(cluster_name);
-                                // Update the tab label
-                                if let Some(page_widget) = notebook.nth_page(Some(current_page as u32)) {
-                                    notebook.set_tab_label_text(&page_widget, cluster_name);
+                                {
+                                    let mut tabs_mut = tabs.borrow_mut();
+                                    let tab = &mut tabs_mut[current_page];
+                                    tab.tab_label_widget.set_text(cluster_name);
+                                    tab.cluster_name = cluster_name.to_string();
+                                    tab.content_stack.set_visible_child_name("list");
+                                    *tab.view_type.borrow_mut() = ViewType::List;
                                 }
-                                // Update stored cluster name
-                                tabs.borrow_mut()[current_page].cluster_name = cluster_name.to_string();
-                                // Switch to list view
-                                tabs.borrow_mut()[current_page].content_stack.set_visible_child_name("list");
-                                *tabs.borrow_mut()[current_page].view_type.borrow_mut() = ViewType::List;
                                 refresh_list_with_settings(&todos, &list_box, &flat_todos, &display_settings);
                             } else {
                                 notification_label.set_text(&format!("Cluster '{}' does not exist. Use :n to create.", cluster_name));
@@ -1029,19 +1048,19 @@ impl ZapWindow {
                                 notification_label.set_visible(true);
                             }
                         }
-                    } else if let Some(cluster_name) = cmd.strip_prefix(":n ") {
+                    } else if let Some(args) = cmd.strip_prefix(":n ") {
                         // Create and open new cluster in current tab
-                        let cluster_name = cluster_name.trim();
+                        let cluster_name = args.trim();
                         if !cluster_name.is_empty() {
                             let new_list = TodoList::load(cluster_name);
                             new_list.save(); // Create the file
                             *todos.borrow_mut() = new_list;
-                            // Update the tab label
-                            if let Some(page_widget) = notebook.nth_page(Some(current_page as u32)) {
-                                notebook.set_tab_label_text(&page_widget, cluster_name);
+                            {
+                                let mut tabs_mut = tabs.borrow_mut();
+                                let tab = &mut tabs_mut[current_page];
+                                tab.tab_label_widget.set_text(cluster_name);
+                                tab.cluster_name = cluster_name.to_string();
                             }
-                            // Update stored cluster name
-                            tabs.borrow_mut()[current_page].cluster_name = cluster_name.to_string();
                             notification_label.set_text(&format!("Created cluster '{}'", cluster_name));
                             notification_label.remove_css_class("notification-error");
                             notification_label.set_visible(true);
@@ -1079,21 +1098,27 @@ impl ZapWindow {
                 }
                 InputMode::Edit(ref path) => {
                     if !text.trim().is_empty() {
+                        let raw_text = text.clone();
                         let (text_after_priority, priority) = parse_priority(&text);
-                        let (task_text, due_date) = parse_date(&text_after_priority);
+                        let (text_after_date, due_date) = parse_date(&text_after_priority);
+                        let (task_text, color) = parse_color(&text_after_date);
+                        let color = color.and_then(|c| if c == "none" { None } else { Some(c) });
                         if !task_text.trim().is_empty() {
-                            todos.borrow_mut().update_at_path(path, task_text, due_date, priority);
+                            todos.borrow_mut().update_at_path(path, task_text, due_date, priority, raw_text, color);
                             refresh_list_with_settings(&todos, &list_box, &flat_todos, &display_settings);
                         }
                     }
                 }
                 InputMode::CalendarInsert(date) => {
                     if !text.trim().is_empty() {
+                        let raw_text = text.clone();
                         let (text_after_priority, priority) = parse_priority(&text);
                         // Ignore any date in the text, use the calendar date
-                        let (task_text, _) = parse_date(&text_after_priority);
+                        let (text_after_date, _) = parse_date(&text_after_priority);
+                        let (task_text, color) = parse_color(&text_after_date);
+                        let color = color.and_then(|c| if c == "none" { None } else { Some(c) });
                         if !task_text.trim().is_empty() {
-                            let todo = Todo::new(task_text, Some(date), priority);
+                            let todo = Todo::new(task_text, Some(date), priority, raw_text, color);
                             todos.borrow_mut().add(todo);
                             // Refresh calendar view
                             let tabs_ref = tabs.borrow();
@@ -1135,6 +1160,19 @@ fn create_todo_row(flat_todo: &FlatTodo, settings: &DisplaySettings) -> ListBoxR
     let row = ListBoxRow::new();
     row.add_css_class("todo-row");
 
+    // Create an outer hbox that contains color bars + the main content hbox
+    let outer_hbox = GtkBox::new(Orientation::Horizontal, 0);
+
+    // Add color bars for inherited colors (stacked left borders)
+    for color in &flat_todo.inherited_colors {
+        let bar = GtkBox::new(Orientation::Vertical, 0);
+        bar.set_width_request(4);
+        let css_provider = gtk4::CssProvider::new();
+        css_provider.load_from_data(&format!("box {{ background-color: {}; }}", color));
+        bar.style_context().add_provider(&css_provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+        outer_hbox.append(&bar);
+    }
+
     let hbox = GtkBox::new(Orientation::Horizontal, 8);
     // No indentation in flattened mode
     let indent = if settings.flattened { 0 } else { flat_todo.depth as i32 * 20 };
@@ -1146,6 +1184,10 @@ fn create_todo_row(flat_todo: &FlatTodo, settings: &DisplaySettings) -> ListBoxR
     // Section rendering - different from regular tasks
     if flat_todo.todo.is_section {
         row.add_css_class("section-row");
+        // Only add the default section border if there are no inherited color bars
+        if flat_todo.inherited_colors.is_empty() {
+            row.add_css_class("section-row-border");
+        }
 
         // Fold chevron for sections with subtasks (not shown in flattened mode)
         if flat_todo.has_subtasks && !settings.flattened {
@@ -1155,9 +1197,18 @@ fn create_todo_row(flat_todo: &FlatTodo, settings: &DisplaySettings) -> ListBoxR
             hbox.append(&chevron_label);
         }
 
+        // Determine accent color for section text/marker
+        let section_color = flat_todo.inherited_colors.last();
+
         // Section marker
         let marker = Label::new(Some("§"));
-        marker.add_css_class("section-marker");
+        if let Some(color) = section_color {
+            let css_provider = gtk4::CssProvider::new();
+            css_provider.load_from_data(&format!("label {{ color: {}; }}", color));
+            marker.style_context().add_provider(&css_provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+        } else {
+            marker.add_css_class("section-marker");
+        }
         hbox.append(&marker);
 
         // Hierarchy path for sections (in flattened mode)
@@ -1172,10 +1223,18 @@ fn create_todo_row(flat_todo: &FlatTodo, settings: &DisplaySettings) -> ListBoxR
         let text_label = Label::new(Some(&flat_todo.todo.text));
         text_label.set_hexpand(true);
         text_label.set_halign(gtk4::Align::Start);
-        text_label.add_css_class("section-text");
+        if let Some(color) = section_color {
+            let css_provider = gtk4::CssProvider::new();
+            css_provider.load_from_data(&format!("label {{ color: {}; font-family: monospace; font-weight: bold; font-size: 14px; }}", color));
+            text_label.style_context().add_provider(&css_provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION + 2);
+        } else {
+            text_label.add_css_class("section-text");
+        }
         hbox.append(&text_label);
 
-        row.set_child(Some(&hbox));
+        hbox.set_hexpand(true);
+        outer_hbox.append(&hbox);
+        row.set_child(Some(&outer_hbox));
         return row;
     }
 
@@ -1279,7 +1338,9 @@ fn create_todo_row(flat_todo: &FlatTodo, settings: &DisplaySettings) -> ListBoxR
         hbox.append(&date_label);
     }
 
-    row.set_child(Some(&hbox));
+    hbox.set_hexpand(true);
+    outer_hbox.append(&hbox);
+    row.set_child(Some(&outer_hbox));
     row
 }
 
@@ -1308,8 +1369,19 @@ fn refresh_list_with_settings(
     }
 
     let todos_ref = todos.borrow();
-    let flat = todos_ref.flatten();
     let settings = display_settings.borrow();
+    let flat = if settings.flattened { todos_ref.flatten_all() } else { todos_ref.flatten() };
+
+    // Hide tasks completed before today
+    let today = Local::now().date_naive();
+    let flat: Vec<FlatTodo> = flat.into_iter().filter(|ft| {
+        if ft.todo.completed {
+            // Keep if due date is today or later, or no due date
+            ft.todo.due_date.map_or(true, |d| d >= today)
+        } else {
+            true
+        }
+    }).collect();
 
     // In flattened mode, filter out section headers and sort to remove section clustering
     let display_flat: Vec<FlatTodo> = if settings.flattened {
@@ -1742,3 +1814,195 @@ fn get_selected_calendar_date(calendar_state: &Rc<RefCell<Option<CalendarState>>
         NaiveDate::from_ymd_opt(state.year, state.month, state.selected_day)
     })
 }
+
+/// 50-color palette for the color picker (10x5 grid)
+const PICKER_COLORS: &[&str] = &[
+    "#e06c75", "#be5046", "#e74c3c", "#c0392b", "#ff6b6b",
+    "#ff4757", "#ee5a24", "#e55039", "#fc5c65", "#eb3b5a",
+    "#d19a66", "#f78c6c", "#e5c07b", "#f39c12", "#f1c40f",
+    "#fed330", "#e67e22", "#fa8231", "#fd9644", "#ffc048",
+    "#98c379", "#c3e88d", "#2ecc71", "#27ae60", "#20bf6b",
+    "#26de81", "#0fb9b1", "#00d2d3", "#1abc9c", "#16a085",
+    "#61afef", "#56b6c2", "#7ec8e3", "#3498db", "#2980b9",
+    "#45aaf2", "#2d98da", "#4b7bec", "#3867d6", "#0652dd",
+    "#c678dd", "#bb80b3", "#a55eea", "#8854d0", "#6c5ce7",
+    "#9b59b6", "#8e44ad", "#e84393", "#fd79a8", "#f368e0",
+];
+
+/// Show a color picker dialog to set color on the currently selected task
+fn show_task_color_picker(
+    parent_window: &ApplicationWindow,
+    tabs: &Rc<RefCell<Vec<TabContent>>>,
+    notebook: &Notebook,
+    display_settings: &Rc<RefCell<DisplaySettings>>,
+) {
+    // Find the selected task's path
+    let current_page = match notebook.current_page() {
+        Some(p) => p as usize,
+        None => return,
+    };
+    let tabs_ref = tabs.borrow();
+    let tab = match tabs_ref.get(current_page) {
+        Some(t) => t,
+        None => return,
+    };
+    let selected_path = {
+        let row = match tab.list_box.selected_row() {
+            Some(r) => r,
+            None => return,
+        };
+        let index = row.index() as usize;
+        let flat = tab.flat_todos.borrow();
+        match flat.get(index) {
+            Some(ft) => ft.path.clone(),
+            None => return,
+        }
+    };
+    drop(tabs_ref);
+
+    let dialog = gtk4::Window::builder()
+        .title("Pick Task Color")
+        .transient_for(parent_window)
+        .modal(true)
+        .default_width(420)
+        .default_height(280)
+        .build();
+
+    let main_box = GtkBox::new(Orientation::Vertical, 8);
+    main_box.set_margin_start(12);
+    main_box.set_margin_end(12);
+    main_box.set_margin_top(12);
+    main_box.set_margin_bottom(12);
+
+    let title_label = Label::new(Some("Select task color:"));
+    title_label.set_halign(gtk4::Align::Start);
+    main_box.append(&title_label);
+
+    let grid = Grid::new();
+    grid.set_row_spacing(4);
+    grid.set_column_spacing(4);
+
+    let btn_css_provider = gtk4::CssProvider::new();
+    let mut css = String::new();
+    for (i, color) in PICKER_COLORS.iter().enumerate() {
+        css.push_str(&format!(
+            ".cpick-{} {{ background-color: {}; background-image: none; box-shadow: none; min-width: 32px; min-height: 32px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1); padding: 0; }}\n\
+             .cpick-{}:hover {{ border: 2px solid white; }}\n",
+            i, color, i
+        ));
+    }
+    css.push_str(".cpick-none { background-color: #3e3e3e; background-image: none; box-shadow: none; min-width: 32px; min-height: 32px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); padding: 0; }\n\
+                  .cpick-none:hover { border: 2px solid white; }\n");
+    btn_css_provider.load_from_data(&css);
+
+    gtk4::style_context_add_provider_for_display(
+        &gtk4::prelude::WidgetExt::display(parent_window),
+        &btn_css_provider,
+        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION + 2,
+    );
+
+    for (i, color) in PICKER_COLORS.iter().enumerate() {
+        let col = (i % 10) as i32;
+        let row = (i / 10) as i32;
+
+        let btn = Button::new();
+        btn.add_css_class(&format!("cpick-{}", i));
+
+        let color_str = color.to_string();
+        let tabs_c = tabs.clone();
+        let notebook_c = notebook.clone();
+        let dialog_c = dialog.clone();
+        let parent_c = parent_window.clone();
+        let btn_css_c = btn_css_provider.clone();
+        let ds_c = display_settings.clone();
+        let path_c = selected_path.clone();
+
+        btn.connect_clicked(move |_| {
+            apply_task_color(&tabs_c, &notebook_c, &ds_c, &path_c, Some(&color_str));
+            gtk4::style_context_remove_provider_for_display(
+                &gtk4::prelude::WidgetExt::display(&parent_c),
+                &btn_css_c,
+            );
+            dialog_c.close();
+        });
+
+        grid.attach(&btn, col, row, 1, 1);
+    }
+
+    main_box.append(&grid);
+
+    // "None" button to remove color
+    let none_btn = Button::with_label("None (remove color)");
+    none_btn.add_css_class("cpick-none");
+    let tabs_c = tabs.clone();
+    let notebook_c = notebook.clone();
+    let dialog_c = dialog.clone();
+    let parent_c = parent_window.clone();
+    let btn_css_c = btn_css_provider.clone();
+    let ds_c = display_settings.clone();
+    let path_c = selected_path.clone();
+    none_btn.connect_clicked(move |_| {
+        apply_task_color(&tabs_c, &notebook_c, &ds_c, &path_c, None);
+        gtk4::style_context_remove_provider_for_display(
+            &gtk4::prelude::WidgetExt::display(&parent_c),
+            &btn_css_c,
+        );
+        dialog_c.close();
+    });
+    main_box.append(&none_btn);
+
+    dialog.set_child(Some(&main_box));
+
+    let key_controller = EventControllerKey::new();
+    let dialog_for_esc = dialog.clone();
+    let parent_for_esc = parent_window.clone();
+    let btn_css_for_esc = btn_css_provider.clone();
+    key_controller.connect_key_pressed(move |_, key, _, _| {
+        if key == gdk::Key::Escape {
+            gtk4::style_context_remove_provider_for_display(
+                &gtk4::prelude::WidgetExt::display(&parent_for_esc),
+                &btn_css_for_esc,
+            );
+            dialog_for_esc.close();
+            return gdk::glib::Propagation::Stop;
+        }
+        gdk::glib::Propagation::Proceed
+    });
+    dialog.add_controller(key_controller);
+
+    dialog.present();
+}
+
+/// Apply a color to the task at the given path
+fn apply_task_color(
+    tabs: &Rc<RefCell<Vec<TabContent>>>,
+    notebook: &Notebook,
+    display_settings: &Rc<RefCell<DisplaySettings>>,
+    path: &[usize],
+    color: Option<&str>,
+) {
+    let current_page = match notebook.current_page() {
+        Some(p) => p as usize,
+        None => return,
+    };
+    let tabs_ref = tabs.borrow();
+    let tab = match tabs_ref.get(current_page) {
+        Some(t) => t,
+        None => return,
+    };
+
+    {
+        let mut todos = tab.todos.borrow_mut();
+        if let Some(todo) = todos.get_mut_at_path(path) {
+            todo.color = color.map(|c| c.to_string());
+        }
+        todos.save();
+    }
+
+    let todos = tab.todos.clone();
+    let list_box = tab.list_box.clone();
+    let flat_todos = tab.flat_todos.clone();
+    drop(tabs_ref);
+    refresh_list_with_settings(&todos, &list_box, &flat_todos, display_settings);
+}
+
