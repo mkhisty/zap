@@ -1,31 +1,17 @@
 # Zap
 
-A minimal, high-speed, vim-style keyboard-first todo list application built with GTK4 and Rust.
-
-## Features
-
-- Vim-style keybindings
-- Flexible date and priority syntax with bracket notation
-- Priority markers with color coding
-- Nested subtasks with folding
-- Multiple task clusters (separate lists)
-- Section headers for organization
+A minimal, vim-style keyboard-first todo list app built with GTK4 and Rust.
 
 ## Installation
 
 ```bash
 cargo build --release
-```
-
-## Usage
-
-```bash
-cargo run
+./target/release/zap
 ```
 
 ## Keybindings
 
-### Navigation (Normal Mode)
+### Normal Mode — Navigation
 
 | Key | Action |
 |-----|--------|
@@ -34,120 +20,165 @@ cargo run
 | `gg` | Jump to first item |
 | `G` | Jump to last item |
 
-### Task Operations
+### Normal Mode — Task Operations
 
 | Key | Action |
 |-----|--------|
 | `Enter` | Toggle task completion |
+| `Alt+Enter` | Mark task as abandoned (never-done) |
 | `dd` | Delete selected task |
-| `J` (Shift+j) | Move task down in order |
-| `K` (Shift+k) | Move task up in order |
+| `J` | Move task down |
+| `K` | Move task up |
 | `za` | Toggle fold/unfold subtasks |
-
-### Insert Modes
-
-| Key | Action |
-|-----|--------|
-| `i` | Insert new task (inline at bottom of list) |
-| `Shift+Enter` | Insert subtask under selected item |
-| `e` | Edit selected task text |
-| `Escape` | Cancel and return to normal mode |
-
-### Command Mode
-
-| Key | Action |
-|-----|--------|
+| `i` | Insert new top-level task |
+| `Shift+Enter` | Insert subtask under selected task |
+| `e` | Edit selected task |
 | `:` | Enter command mode |
-| `Tab` | Autocomplete command/cluster name |
-| `Escape` | Cancel command |
+
+### Global Shortcuts (any mode)
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+T` | Open new tab |
+| `Ctrl+W` | Close current tab |
+| `Ctrl+Shift+C` | Open color picker for selected task (Normal mode) |
+| `Escape` | Return to Normal mode / cancel |
+
+### Calendar View Navigation
+
+| Key | Action |
+|-----|--------|
+| `h` / `←` | Previous day |
+| `l` / `→` | Next day |
+| `k` / `↑` | Previous week |
+| `j` / `↓` | Next week |
+| `<` / `Ctrl+←` | Previous month |
+| `>` / `Ctrl+→` | Next month |
+| `i` | Insert task on selected date |
+
+## Commands
+
+Enter command mode with `:`. Press `Tab` to autocomplete.
+
+| Command | Action |
+|---------|--------|
+| `:e calendar` | Switch current tab to calendar view |
+| `:e list` | Switch current tab to list view |
+| `:sort` | Sort tasks by priority → completion → due date → alphabetically |
+| `:flatten` | Toggle between hierarchical and flat (all tasks at one level) view |
+| `:display_start` | Toggle showing task creation dates |
 
 ## Task Input Syntax
 
-When inserting or editing tasks, you can use the following syntax:
+Metadata markers can appear anywhere in the task text. They are stripped from the display but stored internally.
 
-### Basic Task
-```
-task text
-```
-
-### Due Dates
-
-Use `[date:...]` or `[d:...]` anywhere in the task (case-insensitive):
+### Priority
 
 ```
-task text [date:today]        # Today
-task text [date:tomorrow]     # Tomorrow (also: tom)
-task text [date:monday]       # Next occurrence of weekday
-task text [date:next friday]  # Skip to next week's weekday
-task text [date:jan 15]       # Month and day (also: january 15)
-task text [date:+3]           # 3 days from now
-task text [date:5d]           # 5 days from now
-task text [d:3/15]            # mm/dd (current year)
-task text [d:3/15/25]         # mm/dd/yy
-task text [d:3/15/2025]       # mm/dd/yyyy
+[priority:max]    or  [p:max]
+[priority:high]   or  [p:high]
+[priority:medium] or  [p:medium]
+[priority:low]    or  [p:low]
 ```
 
-### Priority Markers
-
-Use `[priority:LEVEL]` or `[p:LEVEL]` anywhere in the task (case-insensitive):
+### Due Date
 
 ```
-task text [priority:max]      # Maximum priority (red indicator + red row background)
-task text [priority:high]     # High priority (red indicator)
-task text [p:medium]          # Medium priority (yellow indicator)
-task text [p:low]             # Low priority (cyan indicator)
+[date:today]          [d:today]
+[date:tomorrow]       [d:tom]
+[date:monday]         [d:fri]        # next occurrence of weekday
+[date:next monday]                   # skip to following week
+[date:jan 15]         [d:january 15]
+[date:+3]             [d:3d]         # relative days
+[d:3/15]                             # mm/dd (current year)
+[d:3/15/25]                          # mm/dd/yy
+[d:3/15/2025]                        # mm/dd/yyyy
 ```
 
-### Combined Example
+### Color
 
 ```
-Buy groceries [p:high] [d:tomorrow]
+[color:#ff0000]   or  [c:#f00]       # hex color (3 or 6 digit)
+[color:red]       or  [c:blue]       # CSS color name
+[color:none]                         # remove color
 ```
+
+Colors are inherited by subtasks and shown as stacked left-border bars.
 
 ### Sections
 
-Create organizational headers (not tasks):
 ```
 /section Section Name
 ```
 
-## Commands
+Creates a styled `§` header (not a task). Works in both top-level insert and subtask insert modes.
 
-| Command | Action |
-|---------|--------|
-| `:ls` | List all clusters |
-| `:e cluster_name` | Open/switch to cluster |
-| `:n cluster_name` | Create new cluster and open it |
-| `:display_start` | Toggle showing task creation dates |
+### Combined Examples
+
+```
+Fix login bug [p:high] [d:tomorrow] [c:#e06c75]
+Meeting [date:next monday] [p:medium]
+Deploy release [d:+3]
+/section Work
+```
+
+## Color Picker
+
+Press `Ctrl+Shift+C` in Normal mode to open a color swatch dialog for the selected task. Click a color to apply it, or **None** to remove it. Press `Escape` to dismiss without changes.
+
+## Sorting
+
+`:sort` orders tasks by:
+1. Incomplete before complete
+2. Non-abandoned before abandoned
+3. Priority: Max → High → Medium → Low → None
+4. Due date: earlier first, no due date last
+5. Alphabetical (case-insensitive)
 
 ## Configuration
 
-Configuration files are stored in `~/.config/zap/`:
+Config files are auto-generated on first run at `~/.config/zap/`.
 
-### Keybindings (`keybindings.json`)
+### Keybindings — `~/.config/zap/keybindings.json`
 
-Customize keyboard shortcuts. Auto-generated with defaults on first run.
+Single keys and two-key sequences are supported:
 
-### Colors (`colors.json`)
+```json
+{
+  "move_down": "j",
+  "move_up": "k",
+  "go_to_first": "gg",
+  "go_to_last": "G",
+  "toggle_complete": "Return",
+  "delete": "dd",
+  "move_task_down": "J",
+  "move_task_up": "K",
+  "toggle_fold": "za",
+  "insert": "i",
+  "edit": "e"
+}
+```
 
-Customize all UI colors. Auto-generated with defaults on first run. Example settings:
+### Colors — `~/.config/zap/colors.json`
+
 ```json
 {
   "main_bg": "#1e1e1e",
+  "text_color": "#abb2bf",
   "priority_low": "#56b6c2",
   "priority_medium": "#e5c07b",
   "priority_high": "#e06c75",
   "priority_max": "#e06c75",
-  "priority_max_bg": "#5c2f2f"
+  "priority_max_bg": "#5c2f2f",
+  "section_bg": "#2a2a2a",
+  "section_border": "#7c5cbf"
 }
 ```
 
 ## Data Storage
 
-Tasks are stored as JSON files in:
-- Linux: `~/.local/share/zap/`
-- Default cluster: `main.json`
+Tasks are saved as JSON after every change:
 
-## License
+- `~/.local/share/zap/main.json`
 
-MIT
+Multiple tabs share the same underlying task list.

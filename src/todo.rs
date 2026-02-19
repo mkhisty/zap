@@ -149,29 +149,6 @@ impl TodoList {
         }
     }
 
-    pub fn cluster_name(&self) -> &str {
-        &self.cluster_name
-    }
-
-    /// List available clusters
-    pub fn list_clusters() -> Vec<String> {
-        let dir = Self::data_dir();
-        let mut clusters = Vec::new();
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                if let Some(name) = entry.path().file_stem() {
-                    if let Some(ext) = entry.path().extension() {
-                        if ext == "json" {
-                            clusters.push(name.to_string_lossy().to_string());
-                        }
-                    }
-                }
-            }
-        }
-        clusters.sort();
-        clusters
-    }
-
     /// Toggle fold state for a todo by ID
     pub fn toggle_fold(&mut self, id: &str) {
         if self.folded_ids.contains(id) {

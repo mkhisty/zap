@@ -300,17 +300,11 @@ impl ColorConfig {
             }}
 
             .section-marker {{
-                color: {section_text};
-                font-family: monospace;
-                font-weight: bold;
-                font-size: 14px;
+                color: {text_primary};
             }}
 
             .section-text {{
-                color: {section_text};
-                font-family: monospace;
-                font-weight: bold;
-                font-size: 14px;
+                color: {text_primary};
             }}
 
             .inline-entry-row {{
@@ -471,7 +465,6 @@ impl ColorConfig {
             priority_none = self.priority_none,
             section_bg = self.section_bg,
             section_border = self.section_border,
-            section_text = self.section_text,
             insert_indicator = self.insert_indicator,
             text_primary = self.text_primary,
             text_secondary = self.text_secondary,

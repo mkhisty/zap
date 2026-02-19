@@ -48,11 +48,9 @@ struct CalendarState {
 
 /// Per-tab content state
 struct TabContent {
-    todos: Rc<RefCell<TodoList>>,
     list_box: ListBox,
     flat_todos: Rc<RefCell<Vec<FlatTodo>>>,
     inline_entry_row: Rc<RefCell<Option<ListBoxRow>>>,
-    cluster_name: String,
     view_type: Rc<RefCell<ViewType>>,
     calendar_state: Rc<RefCell<Option<CalendarState>>>,
     content_stack: gtk4::Stack,
@@ -65,6 +63,7 @@ struct TabContent {
 pub struct ZapWindow {
     pub window: ApplicationWindow,
     notebook: Notebook,
+    todos: Rc<RefCell<TodoList>>,
     tabs: Rc<RefCell<Vec<TabContent>>>,
     command_entry: Entry,  // Bottom entry for command mode only
     mode_label: Label,
@@ -83,6 +82,7 @@ impl ZapWindow {
         let display_settings = Rc::new(RefCell::new(DisplaySettings::default()));
         let keybindings = Rc::new(Keybindings::load());
         let color_config = Rc::new(ColorConfig::load());
+        let todos = Rc::new(RefCell::new(TodoList::load("main")));
         let tabs: Rc<RefCell<Vec<TabContent>>> = Rc::new(RefCell::new(Vec::new()));
 
         // Create window
@@ -122,7 +122,6 @@ impl ZapWindow {
         let notebook = Notebook::new();
         notebook.set_vexpand(true);
         notebook.set_scrollable(true);
-        notebook.add_css_class("zap-notebook");
 
         // Help label
         let help_label = Label::new(Some("j/k: nav | J/K: reorder | Enter: toggle | dd: del | i: insert | e: edit | za: fold | :: cmd | Ctrl+T/W: tabs | Ctrl+Shift+C: color"));
@@ -150,6 +149,7 @@ impl ZapWindow {
         let zap = Self {
             window,
             notebook,
+            todos,
             tabs,
             command_entry,
             mode_label,
@@ -161,8 +161,8 @@ impl ZapWindow {
             color_config,
         };
 
-        // Create initial tab with "main" cluster
-        zap.add_tab("main");
+        // Create initial tab
+        zap.add_tab();
         zap.setup_keybindings();
         zap.setup_entry_handler();
         zap.setup_entry_autocomplete();
@@ -171,9 +171,8 @@ impl ZapWindow {
         zap
     }
 
-    /// Create a new tab with the given cluster name
-    fn add_tab(&self, cluster_name: &str) {
-        let todos = Rc::new(RefCell::new(TodoList::load(cluster_name)));
+    /// Create a new tab view (shares the same underlying TodoList)
+    fn add_tab(&self) {
         let flat_todos = Rc::new(RefCell::new(Vec::new()));
         let inline_entry_row: Rc<RefCell<Option<ListBoxRow>>> = Rc::new(RefCell::new(None));
         let view_type = Rc::new(RefCell::new(ViewType::List));
@@ -209,18 +208,17 @@ impl ZapWindow {
         content_stack.set_visible_child_name("list");
 
         // Tab label
-        let tab_label = Label::new(Some(cluster_name));
+        let tab_num = self.tabs.borrow().len() + 1;
+        let tab_label = Label::new(Some(&format!("{}", tab_num)));
 
         // Add the page to notebook
         let page_num = self.notebook.append_page(&content_stack, Some(&tab_label));
 
         // Store tab content
         let tab_content = TabContent {
-            todos: todos.clone(),
             list_box: list_box.clone(),
             flat_todos: flat_todos.clone(),
             inline_entry_row,
-            cluster_name: cluster_name.to_string(),
             view_type,
             calendar_state,
             content_stack,
@@ -248,7 +246,7 @@ impl ZapWindow {
                 tab.list_box.remove(&child);
             }
 
-            let todos = tab.todos.borrow();
+            let todos = self.todos.borrow();
             let flat = todos.flatten();
             let settings = self.display_settings.borrow();
 
@@ -295,6 +293,7 @@ impl ZapWindow {
     fn setup_keybindings(&self) {
         let key_controller = EventControllerKey::new();
 
+        let shared_todos = self.todos.clone();
         let tabs = self.tabs.clone();
         let notebook = self.notebook.clone();
         let command_entry = self.command_entry.clone();
@@ -305,6 +304,7 @@ impl ZapWindow {
         let keybindings = self.keybindings.clone();
 
         // Clone self references for tab operations
+        let todos_for_new = shared_todos.clone();
         let tabs_for_new = tabs.clone();
         let notebook_for_new = notebook.clone();
         let display_settings_for_new = display_settings.clone();
@@ -312,6 +312,7 @@ impl ZapWindow {
         let tabs_for_picker = tabs.clone();
         let notebook_for_picker = notebook.clone();
         let ds_for_picker = display_settings.clone();
+        let todos_for_picker = shared_todos.clone();
 
         key_controller.connect_key_pressed(move |_, key, _, modifier| {
             let mode = input_mode.borrow().clone();
@@ -322,7 +323,7 @@ impl ZapWindow {
             // Handle Ctrl+Shift+C - color picker for selected task (works in Normal mode)
             if ctrl && shift && !alt && key == gdk::Key::C {
                 if mode == InputMode::Normal {
-                    show_task_color_picker(&window_for_picker, &tabs_for_picker, &notebook_for_picker, &ds_for_picker);
+                    show_task_color_picker(&window_for_picker, &tabs_for_picker, &notebook_for_picker, &ds_for_picker, &todos_for_picker);
                 }
                 return gdk::glib::Propagation::Stop;
             }
@@ -331,7 +332,7 @@ impl ZapWindow {
             if ctrl && !shift && !alt {
                 if key == gdk::Key::t {
                     // Open new tab
-                    open_new_tab(&tabs_for_new, &notebook_for_new, &display_settings_for_new);
+                    open_new_tab(&todos_for_new, &tabs_for_new, &notebook_for_new, &display_settings_for_new);
                     return gdk::glib::Propagation::Stop;
                 }
                 if key == gdk::Key::w {
@@ -365,7 +366,7 @@ impl ZapWindow {
                 None => return gdk::glib::Propagation::Proceed,
             };
 
-            let todos = tab.todos.clone();
+            let todos = shared_todos.clone();
             let list_box = tab.list_box.clone();
             let flat_todos = tab.flat_todos.clone();
             let inline_entry_row = tab.inline_entry_row.clone();
@@ -507,14 +508,13 @@ impl ZapWindow {
     }
 }
 
-/// Open a new blank tab
+/// Open a new tab (shares the same TodoList)
 fn open_new_tab(
+    todos: &Rc<RefCell<TodoList>>,
     tabs: &Rc<RefCell<Vec<TabContent>>>,
     notebook: &Notebook,
-    _display_settings: &Rc<RefCell<DisplaySettings>>,
+    display_settings: &Rc<RefCell<DisplaySettings>>,
 ) {
-    // Create an empty tab with no cluster loaded
-    let todos = Rc::new(RefCell::new(TodoList::default()));
     let flat_todos = Rc::new(RefCell::new(Vec::new()));
     let inline_entry_row: Rc<RefCell<Option<ListBoxRow>>> = Rc::new(RefCell::new(None));
     let view_type = Rc::new(RefCell::new(ViewType::List));
@@ -547,19 +547,18 @@ fn open_new_tab(
     content_stack.add_named(&scrolled_calendar, Some("calendar"));
     content_stack.set_visible_child_name("list");
 
-    // Tab label - empty/new tab
-    let tab_label = Label::new(Some("[new]"));
+    // Tab label
+    let tab_num = tabs.borrow().len() + 1;
+    let tab_label = Label::new(Some(&format!("{}", tab_num)));
 
     // Add the page to notebook
     let page_num = notebook.append_page(&content_stack, Some(&tab_label));
 
     // Store tab content
     let tab_content = TabContent {
-        todos,
         list_box: list_box.clone(),
-        flat_todos,
+        flat_todos: flat_todos.clone(),
         inline_entry_row,
-        cluster_name: String::new(),
         view_type,
         calendar_state,
         content_stack,
@@ -569,8 +568,23 @@ fn open_new_tab(
     };
     tabs.borrow_mut().push(tab_content);
 
+    // Refresh the new tab with current data
+    let todos_ref = todos.borrow();
+    let settings = display_settings.borrow();
+    let flat = todos_ref.flatten();
+    for flat_todo in &flat {
+        let row = create_todo_row(flat_todo, &settings);
+        list_box.append(&row);
+    }
+    *flat_todos.borrow_mut() = flat;
+    drop(todos_ref);
+    drop(settings);
+
     // Switch to the new tab
     notebook.set_current_page(Some(page_num));
+    if let Some(first_row) = list_box.row_at_index(0) {
+        list_box.select_row(Some(&first_row));
+    }
     list_box.grab_focus();
 }
 
@@ -902,6 +916,7 @@ impl ZapWindow {
     fn setup_entry_handler(&self) {
         // This handler is only for the command bar (Command and Edit modes)
         // Insert modes now use inline entries
+        let shared_todos = self.todos.clone();
         let tabs = self.tabs.clone();
         let notebook = self.notebook.clone();
         let mode_label = self.mode_label.clone();
@@ -938,7 +953,7 @@ impl ZapWindow {
                 }
             };
 
-            let todos = tab.todos.clone();
+            let todos = shared_todos.clone();
             let list_box = tab.list_box.clone();
             let flat_todos = tab.flat_todos.clone();
             drop(tabs_ref);
@@ -952,16 +967,6 @@ impl ZapWindow {
                         settings.show_start_date = !settings.show_start_date;
                         drop(settings);
                         refresh_list_with_settings(&todos, &list_box, &flat_todos, &display_settings);
-                    } else if cmd == ":ls" {
-                        // List available clusters
-                        let clusters = TodoList::list_clusters();
-                        if clusters.is_empty() {
-                            notification_label.set_text("No clusters found");
-                        } else {
-                            notification_label.set_text(&format!("Clusters: {}", clusters.join(", ")));
-                        }
-                        notification_label.remove_css_class("notification-error");
-                        notification_label.set_visible(true);
                     } else if cmd == ":e calendar" || cmd == ":e cal" {
                         // Switch to calendar view
                         let mut tabs_mut = tabs.borrow_mut();
@@ -976,32 +981,19 @@ impl ZapWindow {
                         }
 
                         tab.content_stack.set_visible_child_name("calendar");
-                        // Update tab label
-                        let label_text = if tab.cluster_name.is_empty() {
-                            "[calendar]".to_string()
-                        } else {
-                            format!("{} [cal]", tab.cluster_name)
-                        };
-                        tab.tab_label_widget.set_text(&label_text);
+                        tab.tab_label_widget.set_text("[cal]");
                     } else if cmd == ":e list" {
                         // Switch back to list view
                         let mut tabs_mut = tabs.borrow_mut();
                         let tab = &mut tabs_mut[current_page];
                         *tab.view_type.borrow_mut() = ViewType::List;
                         tab.content_stack.set_visible_child_name("list");
-                        // Update tab label
-                        let label_text = if tab.cluster_name.is_empty() {
-                            "[new]".to_string()
-                        } else {
-                            tab.cluster_name.clone()
-                        };
-                        tab.tab_label_widget.set_text(&label_text);
+                        let tab_num = current_page + 1;
+                        tab.tab_label_widget.set_text(&format!("{}", tab_num));
                         tab.list_box.grab_focus();
-                    } else if let Some(cluster_name) = cmd.strip_prefix(":e ") {
-                        // Open cluster in current tab
-                        let cluster_name = cluster_name.trim();
-                        // Handle calendar/list as special cases (fallback)
-                        if cluster_name == "calendar" || cluster_name == "cal" {
+                    } else if let Some(view_name) = cmd.strip_prefix(":e ") {
+                        let view_name = view_name.trim();
+                        if view_name == "calendar" || view_name == "cal" {
                             let mut tabs_mut = tabs.borrow_mut();
                             let tab = &mut tabs_mut[current_page];
                             *tab.view_type.borrow_mut() = ViewType::Calendar;
@@ -1011,60 +1003,15 @@ impl ZapWindow {
                                 refresh_calendar_view(&tab.calendar_state);
                             }
                             tab.content_stack.set_visible_child_name("calendar");
-                            let label_text = if tab.cluster_name.is_empty() {
-                                "[calendar]".to_string()
-                            } else {
-                                format!("{} [cal]", tab.cluster_name)
-                            };
-                            tab.tab_label_widget.set_text(&label_text);
-                        } else if cluster_name == "list" {
+                            tab.tab_label_widget.set_text("[cal]");
+                        } else if view_name == "list" {
                             let mut tabs_mut = tabs.borrow_mut();
                             let tab = &mut tabs_mut[current_page];
                             *tab.view_type.borrow_mut() = ViewType::List;
                             tab.content_stack.set_visible_child_name("list");
-                            let label_text = if tab.cluster_name.is_empty() {
-                                "[new]".to_string()
-                            } else {
-                                tab.cluster_name.clone()
-                            };
-                            tab.tab_label_widget.set_text(&label_text);
+                            let tab_num = current_page + 1;
+                            tab.tab_label_widget.set_text(&format!("{}", tab_num));
                             tab.list_box.grab_focus();
-                        } else if !cluster_name.is_empty() {
-                            let path = TodoList::cluster_path(cluster_name);
-                            if path.exists() {
-                                *todos.borrow_mut() = TodoList::load(cluster_name);
-                                {
-                                    let mut tabs_mut = tabs.borrow_mut();
-                                    let tab = &mut tabs_mut[current_page];
-                                    tab.tab_label_widget.set_text(cluster_name);
-                                    tab.cluster_name = cluster_name.to_string();
-                                    tab.content_stack.set_visible_child_name("list");
-                                    *tab.view_type.borrow_mut() = ViewType::List;
-                                }
-                                refresh_list_with_settings(&todos, &list_box, &flat_todos, &display_settings);
-                            } else {
-                                notification_label.set_text(&format!("Cluster '{}' does not exist. Use :n to create.", cluster_name));
-                                notification_label.add_css_class("notification-error");
-                                notification_label.set_visible(true);
-                            }
-                        }
-                    } else if let Some(args) = cmd.strip_prefix(":n ") {
-                        // Create and open new cluster in current tab
-                        let cluster_name = args.trim();
-                        if !cluster_name.is_empty() {
-                            let new_list = TodoList::load(cluster_name);
-                            new_list.save(); // Create the file
-                            *todos.borrow_mut() = new_list;
-                            {
-                                let mut tabs_mut = tabs.borrow_mut();
-                                let tab = &mut tabs_mut[current_page];
-                                tab.tab_label_widget.set_text(cluster_name);
-                                tab.cluster_name = cluster_name.to_string();
-                            }
-                            notification_label.set_text(&format!("Created cluster '{}'", cluster_name));
-                            notification_label.remove_css_class("notification-error");
-                            notification_label.set_visible(true);
-                            refresh_list_with_settings(&todos, &list_box, &flat_todos, &display_settings);
                         }
                     } else if cmd == ":sort" {
                         // Sort tasks by priority, date, then alphabetically
@@ -1184,10 +1131,6 @@ fn create_todo_row(flat_todo: &FlatTodo, settings: &DisplaySettings) -> ListBoxR
     // Section rendering - different from regular tasks
     if flat_todo.todo.is_section {
         row.add_css_class("section-row");
-        // Only add the default section border if there are no inherited color bars
-        if flat_todo.inherited_colors.is_empty() {
-            row.add_css_class("section-row-border");
-        }
 
         // Fold chevron for sections with subtasks (not shown in flattened mode)
         if flat_todo.has_subtasks && !settings.flattened {
@@ -1447,29 +1390,11 @@ fn refresh_list_with_settings(
 
 /// Autocomplete command input
 fn autocomplete_command(input: &str) -> Option<String> {
-    let commands = [":e ", ":e calendar", ":e list", ":n ", ":ls", ":sort", ":flatten", ":display_start"];
+    let commands = [":e calendar", ":e list", ":sort", ":flatten", ":display_start"];
 
-    // Check for command completion
     for cmd in &commands {
         if cmd.starts_with(input) && *cmd != input {
             return Some(cmd.to_string());
-        }
-    }
-
-    // Check for cluster name completion after :e or :n
-    if let Some(partial) = input.strip_prefix(":e ") {
-        let clusters = TodoList::list_clusters();
-        for cluster in clusters {
-            if cluster.starts_with(partial) && cluster != partial {
-                return Some(format!(":e {}", cluster));
-            }
-        }
-    } else if let Some(partial) = input.strip_prefix(":n ") {
-        let clusters = TodoList::list_clusters();
-        for cluster in clusters {
-            if cluster.starts_with(partial) && cluster != partial {
-                return Some(format!(":n {}", cluster));
-            }
         }
     }
 
@@ -1835,6 +1760,7 @@ fn show_task_color_picker(
     tabs: &Rc<RefCell<Vec<TabContent>>>,
     notebook: &Notebook,
     display_settings: &Rc<RefCell<DisplaySettings>>,
+    shared_todos: &Rc<RefCell<TodoList>>,
 ) {
     // Find the selected task's path
     let current_page = match notebook.current_page() {
@@ -1909,6 +1835,7 @@ fn show_task_color_picker(
         btn.add_css_class(&format!("cpick-{}", i));
 
         let color_str = color.to_string();
+        let todos_c = shared_todos.clone();
         let tabs_c = tabs.clone();
         let notebook_c = notebook.clone();
         let dialog_c = dialog.clone();
@@ -1918,7 +1845,7 @@ fn show_task_color_picker(
         let path_c = selected_path.clone();
 
         btn.connect_clicked(move |_| {
-            apply_task_color(&tabs_c, &notebook_c, &ds_c, &path_c, Some(&color_str));
+            apply_task_color(&todos_c, &tabs_c, &notebook_c, &ds_c, &path_c, Some(&color_str));
             gtk4::style_context_remove_provider_for_display(
                 &gtk4::prelude::WidgetExt::display(&parent_c),
                 &btn_css_c,
@@ -1934,6 +1861,7 @@ fn show_task_color_picker(
     // "None" button to remove color
     let none_btn = Button::with_label("None (remove color)");
     none_btn.add_css_class("cpick-none");
+    let todos_c = shared_todos.clone();
     let tabs_c = tabs.clone();
     let notebook_c = notebook.clone();
     let dialog_c = dialog.clone();
@@ -1942,7 +1870,7 @@ fn show_task_color_picker(
     let ds_c = display_settings.clone();
     let path_c = selected_path.clone();
     none_btn.connect_clicked(move |_| {
-        apply_task_color(&tabs_c, &notebook_c, &ds_c, &path_c, None);
+        apply_task_color(&todos_c, &tabs_c, &notebook_c, &ds_c, &path_c, None);
         gtk4::style_context_remove_provider_for_display(
             &gtk4::prelude::WidgetExt::display(&parent_c),
             &btn_css_c,
@@ -1975,12 +1903,21 @@ fn show_task_color_picker(
 
 /// Apply a color to the task at the given path
 fn apply_task_color(
+    shared_todos: &Rc<RefCell<TodoList>>,
     tabs: &Rc<RefCell<Vec<TabContent>>>,
     notebook: &Notebook,
     display_settings: &Rc<RefCell<DisplaySettings>>,
     path: &[usize],
     color: Option<&str>,
 ) {
+    {
+        let mut todos = shared_todos.borrow_mut();
+        if let Some(todo) = todos.get_mut_at_path(path) {
+            todo.color = color.map(|c| c.to_string());
+        }
+        todos.save();
+    }
+
     let current_page = match notebook.current_page() {
         Some(p) => p as usize,
         None => return,
@@ -1991,18 +1928,9 @@ fn apply_task_color(
         None => return,
     };
 
-    {
-        let mut todos = tab.todos.borrow_mut();
-        if let Some(todo) = todos.get_mut_at_path(path) {
-            todo.color = color.map(|c| c.to_string());
-        }
-        todos.save();
-    }
-
-    let todos = tab.todos.clone();
     let list_box = tab.list_box.clone();
     let flat_todos = tab.flat_todos.clone();
     drop(tabs_ref);
-    refresh_list_with_settings(&todos, &list_box, &flat_todos, display_settings);
+    refresh_list_with_settings(shared_todos, &list_box, &flat_todos, display_settings);
 }
 
