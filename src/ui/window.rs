@@ -128,6 +128,13 @@ impl ZapWindow {
         zap.apply_css();
         zap.setup_file_watcher();
 
+        zap.window.connect_close_request(|_| {
+            crate::hooks::fire(crate::hooks::HookEvent::AppQuit, None, None);
+            gdk::glib::Propagation::Proceed
+        });
+
+        crate::hooks::fire(crate::hooks::HookEvent::AppStart, None, None);
+
         zap
     }
 
@@ -349,6 +356,13 @@ impl ZapWindow {
                     }
                     _ => {}
                 }
+                return gdk::glib::Propagation::Proceed;
+            }
+
+            // Plugin view — let it handle its own keys
+            if let ViewType::Plugin(_) = *view_type.borrow() {
+                // Extension point: plugin views handle their own keys via TabView::on_key
+                // (add that method to the TabView trait if needed).
                 return gdk::glib::Propagation::Proceed;
             }
 

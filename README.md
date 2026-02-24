@@ -182,3 +182,118 @@ Tasks are saved as JSON after every change:
 - `~/.local/share/zap/main.json`
 
 Multiple tabs share the same underlying task list.
+
+---
+
+## Extending Zap
+
+Zap has four extension points designed for low-friction customisation without patching the core.
+
+### 1. Shell Hooks
+
+Zap fires hook scripts at key lifecycle events. Place executable scripts in `~/.config/zap/hooks/` named after the event. Scripts that don't exist are silently skipped.
+
+**Event names / script filenames:**
+
+| Event | Filename |
+|-------|----------|
+| App launched | `on-app-start` |
+| App closed | `on-app-quit` |
+| Task created | `on-task-create` |
+| Task completed | `on-task-complete` |
+| Task deleted | `on-task-delete` |
+| Task edited | `on-task-edit` |
+| Task abandoned | `on-task-abandon` |
+
+**Environment variables passed to every hook:**
+
+| Variable | Value |
+|----------|-------|
+| `ZAP_EVENT` | The event name (e.g. `on-task-create`) |
+| `ZAP_DATA_DIR` | Path to `~/.local/share/zap/` |
+| `ZAP_TASK_ID` | UUID of the affected task (task events only) |
+| `ZAP_TASK_TEXT` | Display text of the affected task (task events only) |
+
+**Example** — log task completions:
+```bash
+#!/usr/bin/env bash
+# ~/.config/zap/hooks/on-task-complete
+echo "$(date -Is) $ZAP_TASK_TEXT" >> ~/completed-tasks.log
+```
+
+Hooks are fire-and-forget subprocesses; they never block the UI.
+
+### 2. Custom Shell Commands
+
+Place an executable script at `~/.config/zap/commands/<name>` and invoke it from Zap's command mode as `:<name> [arg]`.
+
+```
+:mycommand some argument
+```
+
+Zap passes the argument string as `$1` and sets:
+
+| Variable | Value |
+|----------|-------|
+| `ZAP_CLUSTER` | Active cluster name (e.g. `main`) |
+
+**To add a built-in Rust command** instead of a shell script:
+1. Add an `else if cmd == ":<name>"` branch in `src/ui/commands.rs` inside `setup_entry_handler()`.
+2. Add the command string to the `commands` array in `autocomplete_command()` so Tab-completion works.
+
+### 3. Custom Bracket Syntax
+
+Bracket markers (`[date:tomorrow]`, `[p:high]`, `[color:#ff0000]`) are parsed in `src/date_parser.rs`.
+
+**To add a new marker (e.g. `[remind:...]`):**
+
+1. **Add a parser function** in `src/date_parser.rs` following the pattern of `parse_date()`:
+   ```rust
+   /// Strips `[remind:<value>]` from text and returns (remaining_text, Option<value>).
+   pub fn parse_remind(input: &str) -> (String, Option<String>) { ... }
+   ```
+2. **Add a field** to `Todo` in `src/todo.rs` (e.g. `pub remind_at: Option<String>`), with `#[serde(default)]`.
+3. **Add a field** to `ParsedInput` in `src/ui/actions.rs` (e.g. `pub remind_at: Option<String>`).
+4. **Wire the parser** into `parse_task_input()` in `src/ui/actions.rs`, calling your new function in the pipeline and populating `ParsedInput`.
+5. **Pass the value** through `Todo::new()` and `TodoList::update_at_path()` as needed.
+
+### 4. New Tab Views
+
+Custom tab views appear via `:e <name>` in command mode. A view is a Rust struct implementing the `TabView` trait (`src/ui/tab_view.rs`):
+
+```rust
+pub trait TabView {
+    fn widget(&self) -> gtk4::Widget;           // root GTK widget
+    fn refresh(&self, todos: &TodoList);        // called on data change
+    fn view_name(&self) -> &str;               // matches the `:e <name>` identifier
+}
+```
+
+**To add a new view (e.g. "board"):**
+
+1. **Create** `src/ui/board_view.rs` and implement `TabView` for your struct.
+2. **Declare** the module in `src/ui/mod.rs`: `mod board_view;`
+3. **Add a match arm** in `commands.rs` inside the `":e "` match block, before the `name => { ... }` fallback:
+   ```rust
+   "board" => {
+       let mut tabs_mut = tabs.borrow_mut();
+       let tab = &mut tabs_mut[current_page];
+       let view = board_view::BoardView::new(&todos.borrow());
+       tab.scrolled_plugin.set_child(Some(&view.widget()));
+       *tab.plugin_view.borrow_mut() = Some(Box::new(view));
+       *tab.view_type.borrow_mut() = ViewType::Plugin("board".to_string());
+       tab.content_stack.set_visible_child_name("plugin");
+       tab.tab_label_widget.set_text("[board]");
+   }
+   ```
+4. **Add autocomplete** — include `":e board"` in the `commands` array in `autocomplete_command()`.
+
+When the todo list changes, `TabView::refresh()` is called automatically (add a call to the file-watcher loop in `window.rs` if you want live updates).
+
+### 5. Dialogs
+
+For modal dialogs (e.g. a settings panel or a date picker), see `src/ui/color_picker.rs` as the reference implementation:
+
+- Create a `gtk4::Window` with `set_transient_for(&parent_window)` and `set_modal(true)`.
+- Connect `connect_close_request` or button signals to perform the action and close.
+- Present with `.present()`.

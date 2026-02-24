@@ -10,6 +10,7 @@ use gtk4::{
 
 use crate::todo::{FlatTodo, TodoList};
 use super::list_view::create_todo_row;
+use super::tab_view::TabView;
 use super::types::{DisplaySettings, ViewType};
 
 pub(crate) struct CalendarState {
@@ -31,6 +32,9 @@ pub(crate) struct TabContent {
     #[allow(dead_code)]
     pub scrolled_list: ScrolledWindow,
     pub scrolled_calendar: ScrolledWindow,
+    #[allow(dead_code)]
+    pub scrolled_plugin: ScrolledWindow,
+    pub plugin_view: Rc<RefCell<Option<Box<dyn TabView>>>>,
     pub tab_label_widget: Label,
 }
 
@@ -69,6 +73,14 @@ pub(crate) fn new_tab_content(
     scrolled_calendar.set_margin_bottom(8);
 
     content_stack.add_named(&scrolled_calendar, Some("calendar"));
+
+    let scrolled_plugin = ScrolledWindow::new();
+    scrolled_plugin.set_vexpand(true);
+    scrolled_plugin.set_margin_start(12);
+    scrolled_plugin.set_margin_end(12);
+    scrolled_plugin.set_margin_bottom(8);
+
+    content_stack.add_named(&scrolled_plugin, Some("plugin"));
     content_stack.set_visible_child_name("list");
 
     let tab_num = tabs.borrow().len() + 1;
@@ -84,6 +96,8 @@ pub(crate) fn new_tab_content(
         content_stack,
         scrolled_list,
         scrolled_calendar,
+        scrolled_plugin,
+        plugin_view: Rc::new(RefCell::new(None)),
         tab_label_widget: tab_label,
     };
     tabs.borrow_mut().push(tab_content);

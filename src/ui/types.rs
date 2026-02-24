@@ -20,4 +20,5 @@ pub(crate) struct DisplaySettings {
 pub(crate) enum ViewType {
     List,
     Calendar,
+    Plugin(String), // name matches TabView::view_name()
 }

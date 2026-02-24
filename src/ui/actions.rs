@@ -67,8 +67,13 @@ pub(crate) fn execute_action(action: Action, ctx: &ActionContext) -> gdk::glib::
                 if let Some(flat_todo) = flat.get(index) {
                     let path = flat_todo.path.clone();
                     let task_id = flat_todo.todo.id.clone();
+                    let task_text = flat_todo.todo.text.clone();
+                    let was_completed = flat_todo.todo.completed;
                     drop(flat);
                     ctx.todos.borrow_mut().toggle_at_path(&path);
+                    if !was_completed {
+                        crate::hooks::fire(crate::hooks::HookEvent::TaskComplete, Some(&task_id), Some(&task_text));
+                    }
                     refresh_list_with_settings(&ctx.todos, &ctx.list_box, &ctx.flat_todos, &ctx.display_settings);
                     let new_flat = ctx.flat_todos.borrow();
                     let new_index = new_flat.iter().position(|ft| ft.todo.id == task_id).unwrap_or(index);
@@ -86,8 +91,10 @@ pub(crate) fn execute_action(action: Action, ctx: &ActionContext) -> gdk::glib::
                 if let Some(flat_todo) = flat.get(index) {
                     let path = flat_todo.path.clone();
                     let task_id = flat_todo.todo.id.clone();
+                    let task_text = flat_todo.todo.text.clone();
                     drop(flat);
                     ctx.todos.borrow_mut().abandon_at_path(&path);
+                    crate::hooks::fire(crate::hooks::HookEvent::TaskAbandon, Some(&task_id), Some(&task_text));
                     refresh_list_with_settings(&ctx.todos, &ctx.list_box, &ctx.flat_todos, &ctx.display_settings);
                     let new_flat = ctx.flat_todos.borrow();
                     let new_index = new_flat.iter().position(|ft| ft.todo.id == task_id).unwrap_or(index);
@@ -104,8 +111,11 @@ pub(crate) fn execute_action(action: Action, ctx: &ActionContext) -> gdk::glib::
                 let flat = ctx.flat_todos.borrow();
                 if let Some(flat_todo) = flat.get(index) {
                     let path = flat_todo.path.clone();
+                    let task_id = flat_todo.todo.id.clone();
+                    let task_text = flat_todo.todo.text.clone();
                     drop(flat);
                     ctx.todos.borrow_mut().remove_at_path(&path);
+                    crate::hooks::fire(crate::hooks::HookEvent::TaskDelete, Some(&task_id), Some(&task_text));
                     refresh_list_with_settings(&ctx.todos, &ctx.list_box, &ctx.flat_todos, &ctx.display_settings);
                     let new_count = ctx.flat_todos.borrow().len() as i32;
                     if new_count > 0 {
@@ -289,11 +299,14 @@ fn setup_inline_insert(
                 let parsed = parse_task_input(&text);
                 if !parsed.text.trim().is_empty() {
                     let todo = Todo::new(parsed.text, parsed.due_date, parsed.priority, parsed.raw_text, parsed.color);
+                    let todo_id = todo.id.clone();
+                    let todo_text = todo.text.clone();
                     if let Some(ref path) = parent_path {
                         todos_c.borrow_mut().add_subtask(path, todo);
                     } else {
                         todos_c.borrow_mut().add(todo);
                     }
+                    crate::hooks::fire(crate::hooks::HookEvent::TaskCreate, Some(&todo_id), Some(&todo_text));
                 }
             }
         }

@@ -1,5 +1,6 @@
 mod types;
 mod tab;
+pub mod tab_view;
 mod list_view;
 mod calendar_view;
 mod actions;

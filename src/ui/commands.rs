@@ -4,6 +4,7 @@ use gtk4::{Entry, EventControllerKey, Label, Notebook};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::hooks;
 use crate::todo::{Todo, TodoList};
 use super::actions::parse_task_input;
 use super::calendar_view::{create_calendar_view, refresh_calendar_view};
@@ -92,7 +93,21 @@ pub(crate) fn setup_entry_handler(
                             tab.tab_label_widget.set_text(&format!("{}", current_page + 1));
                             tab.list_box.grab_focus();
                         }
-                        _ => {}
+                        name => {
+                            // Extension point: to add a new view, implement TabView and add a match
+                            // arm above this. This fallback activates an already-loaded plugin view.
+                            let mut tabs_mut = tabs.borrow_mut();
+                            let tab = &mut tabs_mut[current_page];
+                            let has_view = tab.plugin_view.borrow().as_ref()
+                                .map(|v| v.view_name() == name)
+                                .unwrap_or(false);
+                            if has_view {
+                                *tab.view_type.borrow_mut() = ViewType::Plugin(name.to_string());
+                                tab.plugin_view.borrow().as_ref().unwrap().refresh(&todos.borrow());
+                                tab.content_stack.set_visible_child_name("plugin");
+                                tab.tab_label_widget.set_text(&format!("[{}]", name));
+                            }
+                        }
                     }
                 } else if cmd == ":sort" {
                     todos.borrow_mut().sort();
@@ -120,12 +135,32 @@ pub(crate) fn setup_entry_handler(
                         gtk4::glib::ControlFlow::Break
                     });
                 }
-                // Unknown commands are silently ignored
+                // Extension point: external commands in ~/.config/zap/commands/<name>
+                else if let Some(cmd_name) = cmd.strip_prefix(':') {
+                    let parts: Vec<&str> = cmd_name.splitn(2, ' ').collect();
+                    let name = parts[0];
+                    let arg = parts.get(1).copied().unwrap_or("");
+                    let script = dirs::config_dir()
+                        .unwrap_or_default()
+                        .join("zap/commands")
+                        .join(name);
+                    if script.exists() {
+                        std::process::Command::new(&script)
+                            .arg(arg)
+                            .env("ZAP_CLUSTER", "main")
+                            .spawn()
+                            .ok();
+                    }
+                }
             }
             InputMode::Edit(ref path) => {
                 if !text.trim().is_empty() {
                     let parsed = parse_task_input(&text);
                     if !parsed.text.trim().is_empty() {
+                        let task_text = parsed.text.clone();
+                        let task_id = flat_todos.borrow().iter()
+                            .find(|ft| ft.path == *path)
+                            .map(|ft| ft.todo.id.clone());
                         todos.borrow_mut().update_at_path(
                             path,
                             parsed.text,
@@ -134,6 +169,7 @@ pub(crate) fn setup_entry_handler(
                             parsed.raw_text,
                             parsed.color,
                         );
+                        hooks::fire(hooks::HookEvent::TaskEdit, task_id.as_deref(), Some(&task_text));
                         refresh_list_with_settings(&todos, &list_box, &flat_todos, &display_settings);
                     }
                 }
