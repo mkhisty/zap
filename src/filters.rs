@@ -1,5 +1,6 @@
 use crate::todo::FlatTodo;
 use chrono::{Datelike, Local, NaiveDate};
+use regex::Regex;
 
 /// Result of a filter operation
 pub struct FilterResult {
@@ -25,21 +26,19 @@ pub fn is_task_visible(flat_todo: &FlatTodo, filter_str: &str) -> FilterResult {
         return FilterResult::success(true);
     }
 
-    let parts: Vec<&str> = filter_str.split(';').collect();
-    for part in parts {
-        let part = part.trim();
-        if part.is_empty() { continue; }
+    // Matches property-parameter pairs separated by optional whitespace and semicolons.
+    // Group 1: Property name (everything before the first hyphen)
+    // Group 2: Parameter (everything after the hyphen until the next semicolon or end)
+    let re = Regex::new(r"([^;:-]+)-([^;]+)").unwrap();
 
-        let (property, param) = if let Some(idx) = part.find('-') {
-            (part[..idx].trim().to_lowercase(), part[idx + 1..].trim())
-        } else {
-            (part.to_lowercase(), "")
-        };
+    for caps in re.captures_iter(filter_str) {
+        let property = caps.get(1).unwrap().as_str().trim().to_lowercase();
+        let param = caps.get(2).unwrap().as_str().trim();
 
         let result = match property.as_str() {
             "in" => filter_in(flat_todo, param),
             "date" => filter_date(flat_todo, param),
-            _ => FilterResult::success(true), // Unknown property, default to visible
+            _ => FilterResult::success(true),
         };
 
         if !result.visible {

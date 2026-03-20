@@ -11,6 +11,7 @@ use super::calendar_view::{create_calendar_view, refresh_calendar_view};
 use super::list_view::refresh_list_with_settings;
 use super::tab::TabContent;
 use super::types::{DisplaySettings, InputMode, ViewType};
+use regex::Regex;
 
 fn refresh_all_tabs(
     tabs: &Rc<RefCell<Vec<TabContent>>>,
@@ -141,15 +142,8 @@ pub(crate) fn setup_entry_handler(
                         nl.set_visible(false);
                         gtk4::glib::ControlFlow::Break
                     });
-                } else if cmd == ":f" || cmd == ":filter" || cmd.starts_with(":f ") || cmd.starts_with(":filter ") {
-                    let filter_val = if cmd == ":f" || cmd == ":filter" {
-                        None
-                    } else if cmd.starts_with(":f ") {
-                        Some(cmd[3..].trim().to_string())
-                    } else {
-                        Some(cmd[8..].trim().to_string())
-                    };
-
+                } else if let Some(caps) = Regex::new(r"^:f(?:ilter)?(?:\s+(.+))?$").unwrap().captures(cmd) {
+                    let filter_val = caps.get(1).map(|m| m.as_str().trim().to_string());
                     *tab_filter.borrow_mut() = filter_val;
                     refresh_list_with_settings(&shared_todos, &list_box, &flat_todos, &display_settings, &tab_filter.borrow());
                 } else if cmd == ":flatten" {

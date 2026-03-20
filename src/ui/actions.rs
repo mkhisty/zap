@@ -10,6 +10,7 @@ use crate::keybindings::Action;
 use crate::todo::{FlatTodo, Priority, Todo, TodoList};
 use super::list_view::{create_inline_entry_row, get_entry_from_row, move_selection, refresh_list_with_settings};
 use super::types::{DisplaySettings, InputMode};
+use regex::Regex;
 
 pub(crate) struct ParsedInput {
     pub text: String,
@@ -288,9 +289,11 @@ fn setup_inline_insert(
     entry.connect_activate(move |e| {
         let text = e.text().to_string();
         if !text.trim().is_empty() {
-            if let Some(section_name) = text.trim().strip_prefix("/section ") {
-                if !section_name.trim().is_empty() {
-                    let todo = Todo::new_section(section_name.trim().to_string());
+            let section_re = Regex::new(r"^/section\s+(.+)$").unwrap();
+            if let Some(caps) = section_re.captures(text.trim()) {
+                let section_name = caps.get(1).unwrap().as_str().trim();
+                if !section_name.is_empty() {
+                    let todo = Todo::new_section(section_name.to_string());
                     if let Some(ref path) = parent_path {
                         todos_c.borrow_mut().add_subtask(path, todo);
                     } else {
