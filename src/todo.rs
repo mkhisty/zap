@@ -50,10 +50,12 @@ pub struct Todo {
     pub raw_text: String,
     #[serde(default)]
     pub color: Option<String>,
+    #[serde(default)]
+    pub parent_section: Option<String>,
 }
 
 impl Todo {
-    pub fn new(text: String, due_date: Option<NaiveDate>, priority: Priority, raw_text: String, color: Option<String>) -> Self {
+    pub fn new(text: String, due_date: Option<NaiveDate>, priority: Priority, raw_text: String, color: Option<String>, parent_section: Option<String>) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
             text,
@@ -66,6 +68,7 @@ impl Todo {
             abandoned: false,
             raw_text,
             color,
+            parent_section,
         }
     }
 
@@ -82,6 +85,7 @@ impl Todo {
             abandoned: false,
             raw_text: String::new(),
             color: None,
+            parent_section: None,
         }
     }
 
@@ -256,8 +260,13 @@ impl TodoList {
         self.save();
     }
 
-    pub fn add_subtask(&mut self, path: &[usize], subtask: Todo) {
+    pub fn add_subtask(&mut self, path: &[usize], mut subtask: Todo) {
         if let Some(parent) = self.get_mut_at_path(path) {
+            if parent.is_section {
+                subtask.parent_section = Some(parent.text.clone());
+            } else {
+                subtask.parent_section = parent.parent_section.clone();
+            }
             parent.subtasks.push(subtask);
             self.save();
         }
@@ -271,6 +280,7 @@ impl TodoList {
         priority: Priority,
         raw_text: String,
         color: Option<String>,
+        parent_section: Option<String>,
     ) {
         if let Some(todo) = self.get_mut_at_path(path) {
             todo.text = text;
@@ -278,6 +288,7 @@ impl TodoList {
             todo.priority = priority;
             todo.raw_text = raw_text;
             todo.color = color;
+            todo.parent_section = parent_section;
             self.save();
         }
     }

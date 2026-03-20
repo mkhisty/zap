@@ -12,6 +12,27 @@ use super::list_view::refresh_list_with_settings;
 use super::tab::TabContent;
 use super::types::{DisplaySettings, InputMode, ViewType};
 
+fn refresh_all_tabs(
+    tabs: &Rc<RefCell<Vec<TabContent>>>,
+    todos: &Rc<RefCell<TodoList>>,
+    display_settings: &Rc<RefCell<DisplaySettings>>,
+) {
+    let tabs_ref = tabs.borrow();
+    for tab in tabs_ref.iter() {
+        if *tab.view_type.borrow() == ViewType::Calendar {
+            refresh_calendar_view(&tab.calendar_state);
+        } else {
+            refresh_list_with_settings(
+                todos,
+                &tab.list_box,
+                &tab.flat_todos,
+                display_settings,
+                &tab.filter.borrow(),
+            );
+        }
+    }
+}
+
 pub(crate) fn setup_entry_handler(
     command_entry: &Entry,
     todos: &Rc<RefCell<TodoList>>,
@@ -58,9 +79,11 @@ pub(crate) fn setup_entry_handler(
             }
         };
 
-        let todos = shared_todos.clone();
         let list_box = tab.list_box.clone();
         let flat_todos = tab.flat_todos.clone();
+        let view_type = tab.view_type.clone();
+        let calendar_state = tab.calendar_state.clone();
+        let tab_filter = tab.filter.clone();
         drop(tabs_ref);
 
         match mode {
@@ -70,7 +93,7 @@ pub(crate) fn setup_entry_handler(
                     let mut settings = display_settings.borrow_mut();
                     settings.show_start_date = !settings.show_start_date;
                     drop(settings);
-                    refresh_list_with_settings(&todos, &list_box, &flat_todos, &display_settings);
+                    refresh_all_tabs(&tabs, &shared_todos, &display_settings);
                 } else if let Some(view_name) = cmd.strip_prefix(":e ") {
                     match view_name.trim() {
                         "calendar" | "cal" => {
@@ -94,8 +117,6 @@ pub(crate) fn setup_entry_handler(
                             tab.list_box.grab_focus();
                         }
                         name => {
-                            // Extension point: to add a new view, implement TabView and add a match
-                            // arm above this. This fallback activates an already-loaded plugin view.
                             let mut tabs_mut = tabs.borrow_mut();
                             let tab = &mut tabs_mut[current_page];
                             let has_view = tab.plugin_view.borrow().as_ref()
@@ -103,15 +124,15 @@ pub(crate) fn setup_entry_handler(
                                 .unwrap_or(false);
                             if has_view {
                                 *tab.view_type.borrow_mut() = ViewType::Plugin(name.to_string());
-                                tab.plugin_view.borrow().as_ref().unwrap().refresh(&todos.borrow());
+                                tab.plugin_view.borrow().as_ref().unwrap().refresh(&shared_todos.borrow());
                                 tab.content_stack.set_visible_child_name("plugin");
                                 tab.tab_label_widget.set_text(&format!("[{}]", name));
                             }
                         }
                     }
                 } else if cmd == ":sort" {
-                    todos.borrow_mut().sort();
-                    refresh_list_with_settings(&todos, &list_box, &flat_todos, &display_settings);
+                    shared_todos.borrow_mut().sort();
+                    refresh_all_tabs(&tabs, &shared_todos, &display_settings);
                     notification_label.set_text("Tasks sorted");
                     notification_label.remove_css_class("notification-error");
                     notification_label.set_visible(true);
@@ -120,12 +141,23 @@ pub(crate) fn setup_entry_handler(
                         nl.set_visible(false);
                         gtk4::glib::ControlFlow::Break
                     });
+                } else if cmd == ":f" || cmd == ":filter" || cmd.starts_with(":f ") || cmd.starts_with(":filter ") {
+                    let filter_val = if cmd == ":f" || cmd == ":filter" {
+                        None
+                    } else if cmd.starts_with(":f ") {
+                        Some(cmd[3..].trim().to_string())
+                    } else {
+                        Some(cmd[8..].trim().to_string())
+                    };
+
+                    *tab_filter.borrow_mut() = filter_val;
+                    refresh_list_with_settings(&shared_todos, &list_box, &flat_todos, &display_settings, &tab_filter.borrow());
                 } else if cmd == ":flatten" {
                     let mut settings = display_settings.borrow_mut();
                     settings.flattened = !settings.flattened;
                     let is_flat = settings.flattened;
                     drop(settings);
-                    refresh_list_with_settings(&todos, &list_box, &flat_todos, &display_settings);
+                    refresh_all_tabs(&tabs, &shared_todos, &display_settings);
                     notification_label.set_text(if is_flat { "Flattened view" } else { "Hierarchical view" });
                     notification_label.remove_css_class("notification-error");
                     notification_label.set_visible(true);
@@ -134,9 +166,8 @@ pub(crate) fn setup_entry_handler(
                         nl.set_visible(false);
                         gtk4::glib::ControlFlow::Break
                     });
-                }
-                // Extension point: external commands in ~/.config/zap/commands/<name>
-                else if let Some(cmd_name) = cmd.strip_prefix(':') {
+                } else if cmd.starts_with(":") {
+                    let cmd_name = &cmd[1..];
                     let parts: Vec<&str> = cmd_name.splitn(2, ' ').collect();
                     let name = parts[0];
                     let arg = parts.get(1).copied().unwrap_or("");
@@ -161,16 +192,17 @@ pub(crate) fn setup_entry_handler(
                         let task_id = flat_todos.borrow().iter()
                             .find(|ft| ft.path == *path)
                             .map(|ft| ft.todo.id.clone());
-                        todos.borrow_mut().update_at_path(
+                        shared_todos.borrow_mut().update_at_path(
                             path,
                             parsed.text,
                             parsed.due_date,
                             parsed.priority,
                             parsed.raw_text,
                             parsed.color,
+                            None,
                         );
                         hooks::fire(hooks::HookEvent::TaskEdit, task_id.as_deref(), Some(&task_text));
-                        refresh_list_with_settings(&todos, &list_box, &flat_todos, &display_settings);
+                        refresh_list_with_settings(&shared_todos, &list_box, &flat_todos, &display_settings, &tab_filter.borrow());
                     }
                 }
             }
@@ -178,25 +210,23 @@ pub(crate) fn setup_entry_handler(
                 if !text.trim().is_empty() {
                     let parsed = parse_task_input(&text);
                     if !parsed.text.trim().is_empty() {
-                        // Use the calendar date, ignore any parsed date from text
                         let todo = Todo::new(
                             parsed.text,
                             Some(date),
                             parsed.priority,
                             parsed.raw_text,
                             parsed.color,
+                            None,
                         );
-                        todos.borrow_mut().add(todo);
-                        let tabs_ref = tabs.borrow();
-                        if let Some(tab) = tabs_ref.get(current_page) {
-                            if *tab.view_type.borrow() == ViewType::Calendar {
-                                refresh_calendar_view(&tab.calendar_state);
-                            }
+                        shared_todos.borrow_mut().add(todo);
+                        if *view_type.borrow() == ViewType::Calendar {
+                            refresh_calendar_view(&calendar_state);
+                        } else {
+                            refresh_list_with_settings(&shared_todos, &list_box, &flat_todos, &display_settings, &tab_filter.borrow());
                         }
                     }
                 }
             }
-            // Insert modes are handled by inline entries, not this handler
             InputMode::Insert | InputMode::InsertSubtask(_) | InputMode::Normal => {}
         }
 
@@ -239,7 +269,7 @@ pub(crate) fn setup_entry_autocomplete(
 }
 
 fn autocomplete_command(input: &str) -> Option<String> {
-    let commands = [":e calendar", ":e list", ":sort", ":flatten", ":display_start"];
+    let commands = [":e calendar", ":e list", ":sort", ":flatten", ":display_start", ":f", ":filter"];
     for cmd in &commands {
         if cmd.starts_with(input) && *cmd != input {
             return Some(cmd.to_string());

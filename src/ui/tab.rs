@@ -9,7 +9,7 @@ use gtk4::{
 };
 
 use crate::todo::{FlatTodo, TodoList};
-use super::list_view::create_todo_row;
+use super::list_view::refresh_list_with_settings;
 use super::tab_view::TabView;
 use super::types::{DisplaySettings, ViewType};
 
@@ -28,6 +28,7 @@ pub(crate) struct TabContent {
     pub inline_entry_row: Rc<RefCell<Option<ListBoxRow>>>,
     pub view_type: Rc<RefCell<ViewType>>,
     pub calendar_state: Rc<RefCell<Option<CalendarState>>>,
+    pub filter: Rc<RefCell<Option<String>>>,
     pub content_stack: Stack,
     #[allow(dead_code)]
     pub scrolled_list: ScrolledWindow,
@@ -48,6 +49,7 @@ pub(crate) fn new_tab_content(
     let inline_entry_row: Rc<RefCell<Option<ListBoxRow>>> = Rc::new(RefCell::new(None));
     let view_type = Rc::new(RefCell::new(ViewType::List));
     let calendar_state: Rc<RefCell<Option<CalendarState>>> = Rc::new(RefCell::new(None));
+    let filter = Rc::new(RefCell::new(None));
 
     let content_stack = Stack::new();
     content_stack.set_transition_type(StackTransitionType::Crossfade);
@@ -93,6 +95,7 @@ pub(crate) fn new_tab_content(
         inline_entry_row,
         view_type,
         calendar_state,
+        filter,
         content_stack,
         scrolled_list,
         scrolled_calendar,
@@ -123,16 +126,13 @@ pub(crate) fn refresh_tab(
             tab.list_box.remove(&child);
         }
 
-        let todos_ref = todos.borrow();
-        let flat = todos_ref.flatten();
-        let settings = display_settings.borrow();
-
-        for flat_todo in &flat {
-            let row = create_todo_row(flat_todo, &settings);
-            tab.list_box.append(&row);
-        }
-
-        *tab.flat_todos.borrow_mut() = flat;
+        refresh_list_with_settings(
+            todos,
+            &tab.list_box,
+            &tab.flat_todos,
+            display_settings,
+            &tab.filter.borrow(),
+        );
 
         if let Some(first_row) = tab.list_box.row_at_index(0) {
             tab.list_box.select_row(Some(&first_row));

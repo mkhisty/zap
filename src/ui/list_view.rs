@@ -4,6 +4,7 @@ use gtk4::{Box as GtkBox, Entry, Label, ListBox, ListBoxRow, Orientation};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::filters::is_task_visible;
 use crate::todo::{FlatTodo, Priority, TodoList};
 use super::types::DisplaySettings;
 
@@ -188,12 +189,12 @@ pub(crate) fn move_selection(list_box: &ListBox, delta: i32) {
         list_box.select_row(Some(&first));
     }
 }
-
 pub(crate) fn refresh_list_with_settings(
     todos: &Rc<RefCell<TodoList>>,
     list_box: &ListBox,
     flat_todos: &Rc<RefCell<Vec<FlatTodo>>>,
     display_settings: &Rc<RefCell<DisplaySettings>>,
+    tab_filter: &Option<String>,
 ) {
     while let Some(child) = list_box.first_child() {
         list_box.remove(&child);
@@ -204,17 +205,24 @@ pub(crate) fn refresh_list_with_settings(
     let flat = if settings.flattened { todos_ref.flatten_all() } else { todos_ref.flatten() };
 
     let today = Local::now().date_naive();
-    let flat: Vec<FlatTodo> = flat.into_iter().filter(|ft| {
+    let filtered_flat: Vec<FlatTodo> = flat.into_iter().filter(|ft| {
+        // First check completed status
         if ft.todo.completed {
-            ft.todo.due_date.map_or(true, |d| d >= today)
+            if !ft.todo.due_date.map_or(true, |d| d >= today) {
+                return false;
+            }
+        }
+
+        // Then check filter if one exists for this tab
+        if let Some(ref filter_str) = tab_filter {
+            is_task_visible(ft, filter_str).visible
         } else {
             true
         }
     }).collect();
-
     let display_flat: Vec<FlatTodo> = if settings.flattened {
-        let mut filtered: Vec<FlatTodo> = flat.into_iter().filter(|ft| !ft.todo.is_section).collect();
-        filtered.sort_by(|a, b| {
+        let mut sorted: Vec<FlatTodo> = filtered_flat.into_iter().filter(|ft| !ft.todo.is_section).collect();
+        sorted.sort_by(|a, b| {
             if a.todo.abandoned != b.todo.abandoned {
                 return a.todo.abandoned.cmp(&b.todo.abandoned);
             }
@@ -243,11 +251,11 @@ pub(crate) fn refresh_list_with_settings(
             }
             a.todo.text.to_lowercase().cmp(&b.todo.text.to_lowercase())
         });
-        filtered
+        sorted
     } else {
         let mut non_abandoned: Vec<FlatTodo> = Vec::new();
         let mut abandoned: Vec<FlatTodo> = Vec::new();
-        for ft in flat {
+        for ft in filtered_flat {
             if ft.todo.abandoned {
                 abandoned.push(ft);
             } else {

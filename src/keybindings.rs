@@ -155,10 +155,10 @@ impl Keybindings {
             pending: None,
         });
         bindings.insert("toggle_fold".to_string(), KeyBinding {
-            key: "a".to_string(),
-            shift: false, ctrl: false, alt: false,
+            key: "Return".to_string(),
+            shift: true, ctrl: false, alt: false,
             action: Action::ToggleFold,
-            pending: Some("z".to_string()),
+            pending: None,
         });
 
         // Insert modes
@@ -169,7 +169,7 @@ impl Keybindings {
             pending: None,
         });
         bindings.insert("insert_subtask".to_string(), KeyBinding {
-            key: "Return".to_string(),
+            key: "I".to_string(),
             shift: true, ctrl: false, alt: false,
             action: Action::InsertSubtask,
             pending: None,

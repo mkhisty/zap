@@ -194,6 +194,7 @@ fn apply_task_color(
     };
     let list_box = tab.list_box.clone();
     let flat_todos = tab.flat_todos.clone();
+    let tab_filter = tab.filter.clone();
     drop(tabs_ref);
-    refresh_list_with_settings(shared_todos, &list_box, &flat_todos, display_settings);
+    refresh_list_with_settings(shared_todos, &list_box, &flat_todos, display_settings, &tab_filter.borrow());
 }

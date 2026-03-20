@@ -37,6 +37,7 @@ pub(crate) struct ActionContext {
     pub input_mode: Rc<RefCell<InputMode>>,
     pub mode_label: Label,
     pub command_entry: Entry,
+    pub filter: Rc<RefCell<Option<String>>>,
 }
 
 pub(crate) fn execute_action(action: Action, ctx: &ActionContext) -> gdk::glib::Propagation {
@@ -74,7 +75,7 @@ pub(crate) fn execute_action(action: Action, ctx: &ActionContext) -> gdk::glib::
                     if !was_completed {
                         crate::hooks::fire(crate::hooks::HookEvent::TaskComplete, Some(&task_id), Some(&task_text));
                     }
-                    refresh_list_with_settings(&ctx.todos, &ctx.list_box, &ctx.flat_todos, &ctx.display_settings);
+                    refresh_list_with_settings(&ctx.todos, &ctx.list_box, &ctx.flat_todos, &ctx.display_settings, &ctx.filter.borrow());
                     let new_flat = ctx.flat_todos.borrow();
                     let new_index = new_flat.iter().position(|ft| ft.todo.id == task_id).unwrap_or(index);
                     drop(new_flat);
@@ -95,7 +96,7 @@ pub(crate) fn execute_action(action: Action, ctx: &ActionContext) -> gdk::glib::
                     drop(flat);
                     ctx.todos.borrow_mut().abandon_at_path(&path);
                     crate::hooks::fire(crate::hooks::HookEvent::TaskAbandon, Some(&task_id), Some(&task_text));
-                    refresh_list_with_settings(&ctx.todos, &ctx.list_box, &ctx.flat_todos, &ctx.display_settings);
+                    refresh_list_with_settings(&ctx.todos, &ctx.list_box, &ctx.flat_todos, &ctx.display_settings, &ctx.filter.borrow());
                     let new_flat = ctx.flat_todos.borrow();
                     let new_index = new_flat.iter().position(|ft| ft.todo.id == task_id).unwrap_or(index);
                     drop(new_flat);
@@ -116,7 +117,7 @@ pub(crate) fn execute_action(action: Action, ctx: &ActionContext) -> gdk::glib::
                     drop(flat);
                     ctx.todos.borrow_mut().remove_at_path(&path);
                     crate::hooks::fire(crate::hooks::HookEvent::TaskDelete, Some(&task_id), Some(&task_text));
-                    refresh_list_with_settings(&ctx.todos, &ctx.list_box, &ctx.flat_todos, &ctx.display_settings);
+                    refresh_list_with_settings(&ctx.todos, &ctx.list_box, &ctx.flat_todos, &ctx.display_settings, &ctx.filter.borrow());
                     let new_count = ctx.flat_todos.borrow().len() as i32;
                     if new_count > 0 {
                         let new_index = (index as i32).min(new_count - 1);
@@ -135,7 +136,7 @@ pub(crate) fn execute_action(action: Action, ctx: &ActionContext) -> gdk::glib::
                     let path = flat_todo.path.clone();
                     drop(flat);
                     if ctx.todos.borrow_mut().move_down(&path) {
-                        refresh_list_with_settings(&ctx.todos, &ctx.list_box, &ctx.flat_todos, &ctx.display_settings);
+                        refresh_list_with_settings(&ctx.todos, &ctx.list_box, &ctx.flat_todos, &ctx.display_settings, &ctx.filter.borrow());
                         let new_flat = ctx.flat_todos.borrow();
                         for (i, ft) in new_flat.iter().enumerate() {
                             if ft.path.len() == path.len() {
@@ -163,7 +164,7 @@ pub(crate) fn execute_action(action: Action, ctx: &ActionContext) -> gdk::glib::
                     let path = flat_todo.path.clone();
                     drop(flat);
                     if ctx.todos.borrow_mut().move_up(&path) {
-                        refresh_list_with_settings(&ctx.todos, &ctx.list_box, &ctx.flat_todos, &ctx.display_settings);
+                        refresh_list_with_settings(&ctx.todos, &ctx.list_box, &ctx.flat_todos, &ctx.display_settings, &ctx.filter.borrow());
                         let new_flat = ctx.flat_todos.borrow();
                         for (i, ft) in new_flat.iter().enumerate() {
                             if ft.path.len() == path.len() {
@@ -193,7 +194,7 @@ pub(crate) fn execute_action(action: Action, ctx: &ActionContext) -> gdk::glib::
                     let id = flat_todo.todo.id.clone();
                     drop(flat);
                     ctx.todos.borrow_mut().toggle_fold(&id);
-                    refresh_list_with_settings(&ctx.todos, &ctx.list_box, &ctx.flat_todos, &ctx.display_settings);
+                    refresh_list_with_settings(&ctx.todos, &ctx.list_box, &ctx.flat_todos, &ctx.display_settings, &ctx.filter.borrow());
                     if let Some(new_row) = ctx.list_box.row_at_index(index as i32) {
                         ctx.list_box.select_row(Some(&new_row));
                     }
@@ -281,6 +282,7 @@ fn setup_inline_insert(
     let input_mode_c = ctx.input_mode.clone();
     let mode_label_c = ctx.mode_label.clone();
     let inline_entry_row_c = ctx.inline_entry_row.clone();
+    let filter_c = ctx.filter.clone();
     let is_subtask = parent_path.is_some();
 
     entry.connect_activate(move |e| {
@@ -298,7 +300,7 @@ fn setup_inline_insert(
             } else {
                 let parsed = parse_task_input(&text);
                 if !parsed.text.trim().is_empty() {
-                    let todo = Todo::new(parsed.text, parsed.due_date, parsed.priority, parsed.raw_text, parsed.color);
+                    let todo = Todo::new(parsed.text, parsed.due_date, parsed.priority, parsed.raw_text, parsed.color, None);
                     let todo_id = todo.id.clone();
                     let todo_text = todo.text.clone();
                     if let Some(ref path) = parent_path {
@@ -313,7 +315,7 @@ fn setup_inline_insert(
         if let Some(row) = inline_entry_row_c.borrow_mut().take() {
             list_box_c.remove(&row);
         }
-        refresh_list_with_settings(&todos_c, &list_box_c, &flat_todos_c, &display_settings_c);
+        refresh_list_with_settings(&todos_c, &list_box_c, &flat_todos_c, &display_settings_c, &filter_c.borrow());
         *input_mode_c.borrow_mut() = InputMode::Normal;
         mode_label_c.set_text("NORMAL");
         list_box_c.grab_focus();

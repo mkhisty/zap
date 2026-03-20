@@ -76,7 +76,7 @@ impl ZapWindow {
         notebook.set_scrollable(true);
 
         let help_label = Label::new(Some(
-            "j/k: nav | J/K: reorder | Enter: toggle | dd: del | i: insert | e: edit | za: fold | :: cmd | Ctrl+T/W: tabs | Ctrl+Shift+C: color",
+            "j/k: nav | J/K: reorder | Enter: toggle | dd: del | i: insert | Shift+I: subtask | Shift+Enter: fold | :: cmd | Ctrl+T/W: tabs | Ctrl+Shift+C: color",
         ));
         help_label.add_css_class("help-text");
         help_label.set_margin_bottom(4);
@@ -184,7 +184,7 @@ impl ZapWindow {
                         refresh_calendar_view(&tab.calendar_state);
                     } else {
                         let selected_idx = tab.list_box.selected_row().map(|r| r.index());
-                        refresh_list_with_settings(&todos, &tab.list_box, &tab.flat_todos, &display_settings);
+                        refresh_list_with_settings(&todos, &tab.list_box, &tab.flat_todos, &display_settings, &tab.filter.borrow());
                         let count = tab.flat_todos.borrow().len() as i32;
                         if count > 0 {
                             let new_idx = selected_idx.unwrap_or(0).min(count - 1).max(0);
@@ -268,6 +268,7 @@ impl ZapWindow {
             let inline_entry_row = tab.inline_entry_row.clone();
             let view_type = tab.view_type.clone();
             let calendar_state = tab.calendar_state.clone();
+            let tab_filter = tab.filter.clone();
             drop(tabs_ref);
 
             // Non-normal modes: only Escape works
@@ -303,7 +304,7 @@ impl ZapWindow {
                     change_calendar_month(&calendar_state, 1);
                     return gdk::glib::Propagation::Stop;
                 }
-                if ctrl && !shift && !alt {
+                if ctrl && !shift {
                     if is_left {
                         change_calendar_month(&calendar_state, -1);
                         return gdk::glib::Propagation::Stop;
@@ -376,6 +377,7 @@ impl ZapWindow {
                 input_mode: input_mode.clone(),
                 mode_label: mode_label.clone(),
                 command_entry: command_entry.clone(),
+                filter: tab_filter,
             };
 
             let pending = pending_key.borrow().clone();

@@ -1,5 +1,6 @@
 mod colors;
 mod date_parser;
+mod filters;
 mod hooks;
 mod keybindings;
 mod todo;
